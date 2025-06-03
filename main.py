@@ -1,3 +1,5 @@
+# main.py
+
 import threading
 import time
 from typing import Generator, Optional
@@ -11,12 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 app = FastAPI()
-
-# Mount a (empty) /static folder if you ever need to serve CSS/JS/etc.
-# In this example we are simply inlining minimal CSS in the template.
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Jinja2 templates directory
 templates = Jinja2Templates(directory="templates")
 
 
@@ -52,7 +49,7 @@ class FrameGrabber:
     def _capture_loop(self) -> None:
         """
         Actual capture loop; must be implemented by subclasses.
-        Should set self._latest_frame to a valid BGR‐numpy array.
+        Should set self._latest_frame to a valid BGR numpy array.
         """
         raise NotImplementedError("Subclasses must implement _capture_loop")
 
@@ -79,7 +76,13 @@ class OAK1MaxCamera(FrameGrabber):
     FrameGrabber implementation for an OAK-1 Max (DepthAI) camera.
     """
 
-    def __init__(self, device_id: Optional[str], width: int = 640, height: int = 480, fps: int = 30) -> None:
+    def __init__(
+        self,
+        device_id: Optional[str],
+        width: int = 640,
+        height: int = 480,
+        fps: int = 30,
+    ) -> None:
         """
         :param device_id: The OAK device serial number string, or None to pick the first available.
         :param width: Desired color frame width.
@@ -103,23 +106,36 @@ class OAK1MaxCamera(FrameGrabber):
         """
         pipeline = dai.Pipeline()
 
-        # Color camera node
+        # Create a ColorCamera node
         color_cam = pipeline.createColorCamera()
         color_cam.setPreviewSize(self._frame_width, self._frame_height)
         color_cam.setInterleaved(False)
         color_cam.setFps(self._fps)
 
-        # XLinkOut for streaming to host
+        # Create an XLinkOut so we can receive preview frames on the host
         xlink_out = pipeline.createXLinkOut()
         xlink_out.setStreamName("color_stream")
         color_cam.preview.link(xlink_out.input)
 
-        # Create the device (optionally by serial number)
+        # Choose which device to open. If a serial is provided, find its DeviceInfo first.
         if self._device_id:
-            self._device = dai.Device(pipeline, self._device_id)
+            # Look through all connected OAKs for a matching serial
+            all_devices_info = dai.Device.getAllAvailableDevices()
+            matching_devices = [
+                info for info in all_devices_info if info.getMxId() == self._device_id
+            ]
+            if not matching_devices:
+                raise RuntimeError(f"No OAK device found with serial: {self._device_id!r}")
+            # Use the first matching DeviceInfo
+            chosen_info = matching_devices[0]
+            self._device = dai.Device(pipeline, chosen_info)
         else:
+            # If no device_id is given, just grab the first OAK on USB
             self._device = dai.Device(pipeline)
-        self._out_queue = self._device.getOutputQueue(name="color_stream", maxSize=4, blocking=False)
+
+        self._out_queue = self._device.getOutputQueue(
+            name="color_stream", maxSize=4, blocking=False
+        )
         self._pipeline = pipeline
 
     def _capture_loop(self) -> None:
@@ -132,11 +148,11 @@ class OAK1MaxCamera(FrameGrabber):
         while self._is_running:
             in_packet = self._out_queue.tryGet()
             if in_packet is not None:
-                # depthai frames come as either ImgFrame or VideoFrame; convert to OpenCV BGR
+                # depthai frames come as ImgFrame or VideoFrame; getCvFrame() → BGR numpy
                 frame_bgr = in_packet.getCvFrame()
                 if frame_bgr is not None:
                     self._set_frame(frame_bgr)
-            # Sleep a tiny bit to yield CPU if there's no new packet
+            # If no packet is ready, yield CPU briefly
             time.sleep(0.001)
 
 
@@ -145,7 +161,13 @@ class USBWebcamCamera(FrameGrabber):
     FrameGrabber implementation for a standard USB webcam (using OpenCV).
     """
 
-    def __init__(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 30) -> None:
+    def __init__(
+        self,
+        device_index: int = 0,
+        width: int = 1280,
+        height: int = 720,
+        fps: int = 30,
+    ) -> None:
         """
         :param device_index: OpenCV device index (e.g. 0, 1, 2…).
         :param width: Desired capture width.
@@ -159,7 +181,6 @@ class USBWebcamCamera(FrameGrabber):
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self._capture.set(cv2.CAP_PROP_FPS, fps)
 
-        # In case the camera fails to open, we can handle that gracefully
         if not self._capture.isOpened():
             raise RuntimeError(f"Failed to open USB webcam at index {self._device_index}")
 
@@ -170,13 +191,10 @@ class USBWebcamCamera(FrameGrabber):
         while self._is_running:
             ret, frame = self._capture.read()
             if not ret:
-                # If frame read fails, skip and retry
+                # If frame read fails, wait and retry
                 time.sleep(0.01)
                 continue
-            # frame is in BGR order by default from OpenCV
             self._set_frame(frame)
-            # No need to sleep if the camera hardware blocks at the desired fps.
-            # But a tiny sleep can help if OpenCV is too fast:
             time.sleep(0.001)
 
     def stop(self) -> None:
@@ -189,35 +207,33 @@ class USBWebcamCamera(FrameGrabber):
 
 
 # ------------------------------------------------------------------------------
-# Instantiate (and start) exactly three cameras: two OAK-1 Max and one USB webcam.
+# Discover connected OAK devices and assign them to "left" and "right"
 # ------------------------------------------------------------------------------
 
 def list_oak_devices() -> list[str]:
     """
-    Return a list of serial numbers of all connected OAK devices.
+    Return a list of serial numbers (MxId) for all connected OAK devices.
     """
-    return [device.getMxId() for device in dai.Device.getAllAvailableDevices()]
+    return [device_info.getMxId() for device_info in dai.Device.getAllAvailableDevices()]
 
 
-# Discover OAK devices
 oak_serials = list_oak_devices()
 if len(oak_serials) < 2:
     raise RuntimeError("Less than two OAK-1 Max cameras were found. Please connect at least two.")
 
-# Assign the first OAK serial to the left camera, second to the right camera.
+# For example: oak_serials might be ["1944301021ED162F00", "1447B2D71F9A"]
 left_oak_serial = oak_serials[0]
 right_oak_serial = oak_serials[1]
 
-# Create and start the two DepthAI (OAK) camera grabbers
+# Instantiate the two OAK-1 Max cameras (depthai) and the USB webcam
 oak_left_camera = OAK1MaxCamera(device_id=left_oak_serial, width=640, height=480, fps=30)
 oak_left_camera.start()
 
 oak_right_camera = OAK1MaxCamera(device_id=right_oak_serial, width=640, height=480, fps=30)
 oak_right_camera.start()
 
-# Create and start the USB webcam (OBSbot Meet 2, or default device index = 0)
-# If your OBSbot is not at index 0, change it to the correct index (e.g. 1 or 2).
-usb_webcam = USBWebcamCamera(device_index=0, width=1280, height=720, fps=30)
+# If your OBSBOT Meet 2 is not on index 0, change `device_index=0` to the correct index
+usb_webcam = USBWebcamCamera(device_index=1, width=1280, height=720, fps=30)
 usb_webcam.start()
 
 
@@ -236,16 +252,22 @@ def mjpeg_stream_generator(camera: FrameGrabber) -> Generator[bytes, None, None]
         # Encode BGR frame to JPEG
         success, encoded_image = cv2.imencode(".jpg", frame)
         if not success:
-            # If encoding fails, skip this frame
             time.sleep(0.01)
             continue
 
         jpeg_bytes = encoded_image.tobytes()
 
         # Build multipart MJPEG chunk
-        yield boundary + b"\r\n" + b"Content-Type: image/jpeg\r\n" + f"Content-Length: {len(jpeg_bytes)}\r\n\r\n".encode("utf-8") + jpeg_bytes + b"\r\n"
-        # Control the approximate frame rate by sleeping a little (optional)
-        time.sleep(0.03)  # roughly ~30 fps
+        yield (
+            boundary
+            + b"\r\n"
+            + b"Content-Type: image/jpeg\r\n"
+            + f"Content-Length: {len(jpeg_bytes)}\r\n\r\n".encode("utf-8")
+            + jpeg_bytes
+            + b"\r\n"
+        )
+        # Optionally throttle to roughly ~30 fps
+        time.sleep(0.03)
 
 
 @app.get("/", response_class=Response)
