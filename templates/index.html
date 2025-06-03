@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Three-Camera View</title>
+    <style>
+        /* Basic reset */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            height: 100%;
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: row;
+            justify-content: space-around;
+            align-items: flex-start;
+            padding: 20px;
+            height: 100%;
+        }
+
+        .camera-panel {
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+            width: 30%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 10px;
+        }
+
+        .camera-panel h2 {
+            margin-bottom: 10px;
+            font-size: 1.25rem;
+            text-align: center;
+        }
+
+        .camera-panel img {
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            max-width: 100%;
+            height: auto;
+        }
+
+        @media (max-width: 1200px) {
+            .camera-panel {
+                width: 32%;
+            }
+        }
+
+        @media (max-width: 900px) {
+            /* On smaller screens, stack vertically */
+            .container {
+                flex-direction: column;
+                align-items: center;
+            }
+            .camera-panel {
+                width: 80%;
+                margin-bottom: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Left OAK-1 Max -->
+        <div class="camera-panel">
+            <h2>OAK-1 Max (Links)</h2>
+            <img src="/video_left" alt="Left OAK-1 Max Stream" />
+        </div>
+
+        <!-- Center USB Webcam -->
+        <div class="camera-panel">
+            <h2>OBSBOT Meet 2 (Mitte)</h2>
+            <img src="/video_center" alt="Center USB Webcam Stream" />
+        </div>
+
+        <!-- Right OAK-1 Max -->
+        <div class="camera-panel">
+            <h2>OAK-1 Max (Rechts)</h2>
+            <img src="/video_right" alt="Right OAK-1 Max Stream" />
+        </div>
+    </div>
+</body>
+</html>
