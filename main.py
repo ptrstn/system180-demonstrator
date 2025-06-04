@@ -5,7 +5,6 @@ from typing import Generator, Optional, List
 import cv2
 import depthai as dai
 import numpy as np
-import torch
 from ultralytics import YOLO
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
@@ -16,30 +15,30 @@ from fastapi.templating import Jinja2Templates
 # CONSTANTS
 # --------------------------------------------------------------------------
 # OAK-1 Max (DepthAI) camera settings
-OAK_FRAME_WIDTH: int = 640
+OAK_FRAME_WIDTH:  int = 640
 OAK_FRAME_HEIGHT: int = 480
-OAK_FPS: int = 30
+OAK_FPS:          int = 30
 
 # USB webcam (OBSBOT Meet 2) settings
-USB_DEVICE_INDEX: int = 1
-USB_FRAME_WIDTH: int = 1280
-USB_FRAME_HEIGHT: int = 720
-USB_FPS: int = 30
+USB_DEVICE_INDEX:  int = 0
+USB_FRAME_WIDTH:   int = 1280
+USB_FRAME_HEIGHT:  int = 720
+USB_FPS:           int = 30
 
 # MJPEG streaming boundary
 MJPEG_BOUNDARY: bytes = b"--frameboundary"
 
-# YOLOv11 model paths (one per camera)
-YOLO_MODEL_LEFT: str = "yolov11_cam1.pt"
-YOLO_MODEL_CENTER: str = "yolov11_cam2.engine"
-YOLO_MODEL_RIGHT: str = "yolov11_cam3.pt"
+# YOLOv11 TensorRT‐engine paths (one per camera)
+YOLO_ENGINE_LEFT:   str = "/home/sys180/models/NubsUpDown.engine"
+YOLO_ENGINE_RIGHT:  str = "/home/sys180/models/NubsUpDown.engine"
+YOLO_ENGINE_CENTER: str = "/home/sys180/models/system180custommodel_v1.engine"
 
 # Inference settings (common defaults)
-YOLO_IMG_SIZE: int = 640
+YOLO_IMG_SIZE:   int   = 640
 YOLO_CONF_THRESH: float = 0.25
-YOLO_IOU_THRESH: float = 0.45
-YOLO_MAX_DET: int = 1000
-YOLO_DEVICE: str = "cuda"  # on Jetson Nano Orin, use GPU
+YOLO_IOU_THRESH:  float = 0.45
+YOLO_MAX_DET:     int   = 1000
+YOLO_DEVICE:      str   = "cuda"  # TensorRT will run on GPU
 
 
 # --------------------------------------------------------------------------
@@ -152,18 +151,12 @@ class OAK1MaxCamera(FrameGrabber):
 
         # Choose which device to open. If a serial is provided, find its DeviceInfo first.
         if self._device_id:
-            # Look through all connected OAKs for a matching serial
-            all_devices_info = dai.Device.getAllAvailableDevices()
-            matching_devices = [
-                info for info in all_devices_info if info.getMxId() == self._device_id
-            ]
-            if not matching_devices:
+            all_devices = dai.Device.getAllAvailableDevices()
+            matching = [d for d in all_devices if d.getMxId() == self._device_id]
+            if not matching:
                 raise RuntimeError(f"No OAK device found with serial: {self._device_id!r}")
-            # Use the first matching DeviceInfo
-            chosen_info = matching_devices[0]
-            self._device = dai.Device(pipeline, chosen_info)
+            self._device = dai.Device(pipeline, matching[0])
         else:
-            # If no device_id is given, just grab the first OAK on USB
             self._device = dai.Device(pipeline)
 
         self._out_queue = self._device.getOutputQueue(
@@ -181,12 +174,10 @@ class OAK1MaxCamera(FrameGrabber):
         while self._is_running:
             in_packet = self._out_queue.tryGet()
             if in_packet is not None:
-                # depthai frames come as ImgFrame or VideoFrame; getCvFrame() → BGR numpy
-                frame_bgr = in_packet.getCvFrame()
+                frame_bgr = in_packet.getCvFrame()  # → BGR numpy
                 if frame_bgr is not None:
                     self._set_frame(frame_bgr)
-            # If no packet is ready, yield CPU briefly
-            time.sleep(0.001)
+            time.sleep(0.001)  # yield CPU briefly
 
 
 class USBWebcamCamera(FrameGrabber):
@@ -224,7 +215,6 @@ class USBWebcamCamera(FrameGrabber):
         while self._is_running:
             ret, frame = self._capture.read()
             if not ret:
-                # If frame read fails, wait and retry
                 time.sleep(0.01)
                 continue
             self._set_frame(frame)
@@ -240,16 +230,16 @@ class USBWebcamCamera(FrameGrabber):
 
 
 # ----------------------------------------------------------------------------------
-# INFERENCE WRAPPER: Runs YOLOv11 on GPU in a separate thread, draws boxes, and stores
-# the annotated frame in place of the raw frame. Streams exactly like FrameGrabber.
+# INFERENCE WRAPPER: Runs a TensorRT engine with ultralytics.YOLO, draws boxes,
+# stores the annotated frame. No torch import needed.
 # ----------------------------------------------------------------------------------
 
 class InferenceCamera(FrameGrabber):
     """
-    Wraps an existing FrameGrabber (raw video source) with a YOLOv11 model.
+    Wraps an existing FrameGrabber (raw video source) with a YOLO TensorRT‐engine.
     This class runs a separate inference thread that:
       1. Pulls the latest raw frame from `base_cam`
-      2. Runs YOLOv11 inference on GPU (half precision)
+      2. Runs the TensorRT engine via ultralytics.YOLO
       3. Draws the bounding boxes & labels on the frame
       4. Stores the annotated frame for streaming
     """
@@ -257,29 +247,28 @@ class InferenceCamera(FrameGrabber):
     def __init__(
         self,
         base_cam: FrameGrabber,
-        model_path: str,
-        device: str = YOLO_DEVICE,
+        engine_path: str,
         img_size: int = YOLO_IMG_SIZE,
         conf_thresh: float = YOLO_CONF_THRESH,
         iou_thresh: float = YOLO_IOU_THRESH,
         agnostic_nms: bool = False,
         classes: Optional[List[int]] = None,
         max_det: int = YOLO_MAX_DET,
+        device: str = YOLO_DEVICE,
     ) -> None:
         """
-        :param base_cam:              The raw FrameGrabber (e.g. OAK1MaxCamera or USBWebcamCamera).
-        :param model_path:            Path to your YOLOv11 .pt or .engine file.
-        :param device:                "cuda" (on Orin) or "cpu".
-        :param img_size:              YOLO’s inference size (images will be letterboxed to this square).
-        :param conf_thresh:           Confidence threshold for detections.
-        :param iou_thresh:            IoU threshold for NMS.
-        :param agnostic_nms:          Whether to run class-agnostic NMS.
-        :param classes:               If you only want certain class IDs, supply a list here.
-        :param max_det:               Max detections per image (usually 300–1000).
+        :param base_cam:    The raw FrameGrabber (e.g. OAK1MaxCamera or USBWebcamCamera).
+        :param engine_path: Path to your TensorRT `.engine` file.
+        :param img_size:    YOLO’s inference size (images will be letterboxed to this square).
+        :param conf_thresh: Confidence threshold for detections.
+        :param iou_thresh:  IoU threshold for NMS.
+        :param agnostic_nms:Whether to run class-agnostic NMS.
+        :param classes:     If you only want certain class IDs, supply a list here.
+        :param max_det:     Max detections per image (usually 300–1000).
+        :param device:      “cuda” (TensorRT) or “cpu” (rare for Jetson).
         """
         super().__init__()
         self.base_cam = base_cam
-        self.device = device
         self.img_size = img_size
         self.conf_thresh = conf_thresh
         self.iou_thresh = iou_thresh
@@ -287,33 +276,24 @@ class InferenceCamera(FrameGrabber):
         self.classes = classes
         self.max_det = max_det
 
-        # Load the YOLOv11 model:
-        # If you have a .engine (TensorRT) file, you can pass it here directly
-        # (e.g. model = YOLO("yolov11_camX.engine")).
-        self.model = YOLO(model_path)
-        self.model.to(self.device)             # move to GPU
-        self.model.overrides["imgsz"] = (img_size, img_size)
-        self.model.overrides["conf"] = conf_thresh
-        self.model.overrides["iou"] = iou_thresh
+        # Load the TensorRT engine via ultralytics.YOLO
+        # (if you pass a `.engine`, YOLO will automatically use the TRT runtime under the hood).
+        self.model = YOLO(engine_path)
+        self.model.overrides["imgsz"]   = (img_size, img_size)
+        self.model.overrides["conf"]    = conf_thresh
+        self.model.overrides["iou"]     = iou_thresh
         self.model.overrides["max_det"] = max_det
         if classes is not None:
             self.model.overrides["classes"] = classes
-
-        # Force FP16 on Jetson Orin (TensorRT path will also run in FP16 by default if supported)
-        try:
-            self.model.model.half()
-        except Exception:
-            # Some exported engines don’t accept .half(); skip if that fails.
-            pass
 
         self._lock = threading.Lock()
         self._latest_annotated: Optional[np.ndarray] = None
         self._is_running = False
 
-        # (Optional) Pre-warm the model on a dummy frame to avoid cold-start lag:
+        # (Optional) Pre‐warm the engine on a dummy frame so the first
+        # inference isn’t slow. Uncomment if you want to reduce cold‐start lag.
         # dummy = np.zeros((OAK_FRAME_HEIGHT, OAK_FRAME_WIDTH, 3), dtype=np.uint8)
-        # with torch.no_grad():
-        #     _ = self.model.predict(source=[dummy], imgsz=self.img_size, device=self.device)
+        # _ = self.model.predict(source=[dummy], imgsz=self.img_size, device=device)
 
     def start(self) -> None:
         """
@@ -341,39 +321,36 @@ class InferenceCamera(FrameGrabber):
         """
         Continuously:
           1. Grab the most recent raw frame from base_cam
-          2. Run YOLOv11 inference on it (on GPU)
+          2. Run the TRT engine via self.model.predict(…)
           3. Draw boxes/labels on the frame
           4. Store annotated frame into self._latest_annotated
         """
         while self._is_running:
             raw = self.base_cam.get_latest_frame()
             if raw is None:
-                # No raw frame yet; wait a millisecond
                 time.sleep(0.001)
                 continue
 
-            # 1) Pre-process & run inference
-            with torch.no_grad():
-                results = self.model.predict(
-                    source=[raw],                # single‐image batch
-                    imgsz=self.img_size,
-                    device=self.device,
-                    conf=self.conf_thresh,
-                    iou=self.iou_thresh,
-                    max_det=self.max_det,
-                    agnostic_nms=self.agnostic_nms,
-                    classes=self.classes,
-                    augment=False,
-                    verbose=False,
-                )
+            # Run inference. Because model is a .engine, ultralytics will use TensorRT directly.
+            results = self.model.predict(
+                source=[raw],                # single‐image batch
+                imgsz=self.img_size,
+                device=YOLO_DEVICE,
+                conf=self.conf_thresh,
+                iou=self.iou_thresh,
+                max_det=self.max_det,
+                agnostic_nms=self.agnostic_nms,
+                classes=self.classes,
+                augment=False,
+                verbose=False,
+            )
 
-            # 2) Extract boxes, confidences, class IDs, and labels
             annotated = raw.copy()
             dets = results[0].boxes  # type: ignore[attr-defined]
             if dets is not None and len(dets) > 0:
-                xyxy = dets.xyxy.cpu().numpy()
-                conf = dets.conf.cpu().numpy()
-                classes_arr = dets.cls.cpu().numpy().astype(int)
+                xyxy       = dets.xyxy.cpu().numpy()
+                conf       = dets.conf.cpu().numpy()
+                classes_arr= dets.cls.cpu().numpy().astype(int)
 
                 for box, c, cls_id in zip(xyxy, conf, classes_arr):
                     x1, y1, x2, y2 = box.astype(int)
@@ -398,11 +375,10 @@ class InferenceCamera(FrameGrabber):
                         thickness=1,
                     )
 
-            # 3) Store annotated frame
             with self._lock:
                 self._latest_annotated = annotated
 
-            # Throttle slightly to avoid burning 100% CPU
+            # Throttle a bit to avoid burning CPU at 100%
             time.sleep(0.001)
 
     def get_latest_frame(self) -> Optional[np.ndarray]:
@@ -417,7 +393,7 @@ class InferenceCamera(FrameGrabber):
 
 
 # ------------------------------------------------------------------------------
-# DISCOVER connected OAK devices and assign them to "left" and "right"
+# Discover connected OAK devices and assign them to "left" and "right"
 # ------------------------------------------------------------------------------
 
 def list_oak_devices() -> list[str]:
@@ -432,23 +408,23 @@ print(f"OAK Serials: {oak_serials}")
 if len(oak_serials) < 2:
     raise RuntimeError("Less than two OAK-1 Max cameras were found. Please connect at least two.")
 
-left_oak_serial = oak_serials[0]
+left_oak_serial  = oak_serials[0]
 right_oak_serial = oak_serials[1]
 
 
 # --------------------------------------------------------------------------
 # Instantiate RAW and INFERENCE cameras
 # --------------------------------------------------------------------------
+
 # 1) Raw capture objects (unchanged)
 oak_left_raw   = OAK1MaxCamera(device_id=left_oak_serial,  width=OAK_FRAME_WIDTH, height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
 oak_right_raw  = OAK1MaxCamera(device_id=right_oak_serial, width=OAK_FRAME_WIDTH, height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
 usb_center_raw = USBWebcamCamera(device_index=USB_DEVICE_INDEX, width=USB_FRAME_WIDTH, height=USB_FRAME_HEIGHT, fps=USB_FPS)
 
-# 2) Wrap each raw grabber in its own InferenceCamera, using the constants:
+# 2) Wrap each raw grabber in its own InferenceCamera (using the constants above)
 oak_left_infer   = InferenceCamera(
     base_cam=oak_left_raw,
-    model_path=YOLO_MODEL_LEFT,
-    device=YOLO_DEVICE,
+    engine_path=YOLO_ENGINE_LEFT,
     img_size=YOLO_IMG_SIZE,
     conf_thresh=YOLO_CONF_THRESH,
     iou_thresh=YOLO_IOU_THRESH,
@@ -456,8 +432,7 @@ oak_left_infer   = InferenceCamera(
 )
 oak_right_infer  = InferenceCamera(
     base_cam=oak_right_raw,
-    model_path=YOLO_MODEL_RIGHT,
-    device=YOLO_DEVICE,
+    engine_path=YOLO_ENGINE_RIGHT,
     img_size=YOLO_IMG_SIZE,
     conf_thresh=YOLO_CONF_THRESH,
     iou_thresh=YOLO_IOU_THRESH,
@@ -465,15 +440,14 @@ oak_right_infer  = InferenceCamera(
 )
 usb_center_infer = InferenceCamera(
     base_cam=usb_center_raw,
-    model_path=YOLO_MODEL_CENTER,
-    device=YOLO_DEVICE,
+    engine_path=YOLO_ENGINE_CENTER,
     img_size=YOLO_IMG_SIZE,
     conf_thresh=YOLO_CONF_THRESH,
     iou_thresh=YOLO_IOU_THRESH,
     max_det=YOLO_MAX_DET,
 )
 
-# 3) Start both raw and inference threads
+# 3) Start raw + inference threads
 oak_left_infer.start()
 oak_right_infer.start()
 usb_center_infer.start()
@@ -517,7 +491,7 @@ def mjpeg_stream_generator(camera: FrameGrabber) -> Generator[bytes, None, None]
 
 
 # ------------------------------------------------------------------------------
-# FASTAPI ROUTES (unchanged except for using the inference wrappers)
+# FASTAPI ROUTES
 # ------------------------------------------------------------------------------
 
 @app.get("/", response_class=Response)
