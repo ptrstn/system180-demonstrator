@@ -66,12 +66,19 @@ templates = Jinja2Templates(directory="templates")
 # Basisklasse: FrameGrabber
 # ============================================
 class FrameGrabber:
+    """
+    Basisklasse für eine Kamera, die im Hintergrund Frames abruft
+    und immer nur das zuletzt gelesene Frame speichert.
+    """
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
         self._is_running = False
 
     def start(self) -> None:
+        """
+        Thread starten, der kontinuierlich Frames abruft.
+        """
         if self._is_running:
             return
         self._is_running = True
@@ -79,20 +86,32 @@ class FrameGrabber:
         self._thread.start()
 
     def stop(self) -> None:
+        """
+        Thread anhalten.
+        """
         self._is_running = False
         if hasattr(self, "_thread"):
             self._thread.join(timeout=1.0)
 
     def _capture_loop(self) -> None:
+        """
+        Muss von Unterklassen überschrieben werden. Setzt self._latest_frame.
+        """
         raise NotImplementedError("Subclasses must implement _capture_loop")
 
     def get_latest_frame(self) -> Optional[np.ndarray]:
+        """
+        Gibt das aktuellste Frame (BGR) zurück, oder None.
+        """
         with self._lock:
             if self._latest_frame is None:
                 return None
             return self._latest_frame.copy()
 
     def _set_frame(self, frame: np.ndarray) -> None:
+        """
+        Intern: Speichert das neueste Frame.
+        """
         with self._lock:
             self._latest_frame = frame
 
@@ -101,6 +120,9 @@ class FrameGrabber:
 # OAK-1 Max Camera (nur Raw-Frames)
 # ============================================
 class OAK1MaxCamera(FrameGrabber):
+    """
+    Implementierung für OAK-1 Max (DepthAI). Liefert Vorschau-Frames in BGR.
+    """
     def __init__(
         self,
         device_id: Optional[str],
@@ -157,6 +179,9 @@ class OAK1MaxCamera(FrameGrabber):
 # USB-Webcam (nur Raw-Frames)
 # ============================================
 class USBWebcamCamera(FrameGrabber):
+    """
+    FrameGrabber-Implementierung für eine Standard-USB-Webcam via OpenCV.
+    """
     def __init__(
         self,
         device_index: int = USB_DEVICE_INDEX,
@@ -189,13 +214,14 @@ class USBWebcamCamera(FrameGrabber):
 
 
 # ============================================
-# DetectCamera (Bounding-Box-Inference + ArUco, optimiert)
+# DetectCamera (Bounding-Box-Inference + ArUco + FPS)
 # ============================================
 class DetectCamera(FrameGrabber):
     """
     Wrappt einen Roh-FrameGrabber (z.B. USBWebcamCamera) mit YOLO-Engine für Bounding-Boxes.
     Zusätzlich führt es ArUco-Erkennung – auf 320×320 Resize – nur alle ARUCO_SKIP_FRAMES aus,
     um Pixel→mm-Ratio zu berechnen und reale Maße neben jedem Box-Label anzuzeigen.
+    Außerdem berechnet und zeigt es FPS zwischen zwei Inferenz-Durchläufen an.
     """
     def __init__(
         self,
@@ -231,6 +257,8 @@ class DetectCamera(FrameGrabber):
         self._is_running = False
         self._frame_counter = 0
         self.last_known_ratio: Optional[float] = None  # Pixel→mm-Ratio
+        self._last_time = time.time()                 # für FPS-Berechnung
+        self._fps: float = 0.0                        # zuletzt berechnete FPS
 
     def start(self) -> None:
         self.base_cam.start()
@@ -251,6 +279,12 @@ class DetectCamera(FrameGrabber):
             if raw_full is None:
                 time.sleep(0.001)
                 continue
+
+            current_time = time.time()
+            dt = current_time - self._last_time
+            if dt > 0:
+                self._fps = 1.0 / dt
+            self._last_time = current_time
 
             self._frame_counter += 1
 
@@ -325,7 +359,18 @@ class DetectCamera(FrameGrabber):
                         thickness=1,
                     )
 
-            # 6) Frame-Nummer einblenden (links oben)
+            # 6) FPS-Anzeige und Frame-Nummer einblenden
+            fps_text = f"FPS: {self._fps:.1f}"
+            cv2.putText(
+                annotated_320,
+                fps_text,
+                (5, self.model_input_size - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 0),
+                thickness=1,
+            )
+
             text = f"Center Cam Frame #{self._frame_counter}"
             cv2.putText(
                 annotated_320,
@@ -351,11 +396,12 @@ class DetectCamera(FrameGrabber):
 
 
 # ============================================
-# SegmentCamera (Masken-Inference)
+# SegmentCamera (Masken-Inference + FPS)
 # ============================================
 class SegmentCamera(FrameGrabber):
     """
     Wrappt einen Roh-FrameGrabber (z.B. OAK1MaxCamera) mit YOLO-Engine für Segmentierung.
+    Zeigt ebenfalls FPS und Frame-Nummer an.
     """
     def __init__(
         self,
@@ -390,6 +436,8 @@ class SegmentCamera(FrameGrabber):
         self._latest_annotated_320: Optional[np.ndarray] = None
         self._is_running = False
         self._frame_counter = 0
+        self._last_time = time.time()
+        self._fps: float = 0.0
 
     def start(self) -> None:
         self.base_cam.start()
@@ -410,6 +458,12 @@ class SegmentCamera(FrameGrabber):
             if raw_full is None:
                 time.sleep(0.001)
                 continue
+
+            current_time = time.time()
+            dt = current_time - self._last_time
+            if dt > 0:
+                self._fps = 1.0 / dt
+            self._last_time = current_time
 
             self._frame_counter += 1
             if (self._frame_counter % self.skip_frames) != 0:
@@ -439,6 +493,18 @@ class SegmentCamera(FrameGrabber):
             # Masken-Overlay zeichnen
             seg_overlay_rgb = results[0].plot()
             annotated_320 = cv2.cvtColor(seg_overlay_rgb, cv2.COLOR_RGB2BGR)
+
+            # FPS-Anzeige
+            fps_text = f"FPS: {self._fps:.1f}"
+            cv2.putText(
+                annotated_320,
+                fps_text,
+                (5, self.model_input_size - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 0),
+                thickness=1,
+            )
 
             # Frame-Nummer einblenden
             label = f"Frame #{self._frame_counter}"
@@ -576,7 +642,7 @@ def video_left() -> StreamingResponse:
 
 @app.get("/video_center")
 def video_center() -> StreamingResponse:
-    # USB-Webcam: Detect (Bounding-Boxes + reale Maße)
+    # USB-Webcam: Detect (Bounding-Boxes + reale Maße + FPS)
     return StreamingResponse(
         mjpeg_stream_generator(usb_center_detect),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
