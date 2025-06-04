@@ -1,5 +1,3 @@
-# main.py
-
 import threading
 import time
 from typing import Generator, Optional
@@ -12,6 +10,27 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+# --------------------------------------------------------------------------
+# CONSTANTS
+# --------------------------------------------------------------------------
+# OAK-1 Max (DepthAI) camera settings
+OAK_FRAME_WIDTH: int = 640
+OAK_FRAME_HEIGHT: int = 480
+OAK_FPS: int = 30
+
+# USB webcam (OBSBOT Meet 2) settings
+USB_DEVICE_INDEX: int = 1
+USB_FRAME_WIDTH: int = 1280
+USB_FRAME_HEIGHT: int = 720
+USB_FPS: int = 30
+
+# MJPEG streaming boundary
+MJPEG_BOUNDARY: bytes = b"--frameboundary"
+
+
+# --------------------------------------------------------------------------
+# FASTAPI SETUP
+# --------------------------------------------------------------------------
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -79,9 +98,9 @@ class OAK1MaxCamera(FrameGrabber):
     def __init__(
         self,
         device_id: Optional[str],
-        width: int = 640,
-        height: int = 480,
-        fps: int = 30,
+        width: int = OAK_FRAME_WIDTH,
+        height: int = OAK_FRAME_HEIGHT,
+        fps: int = OAK_FPS,
     ) -> None:
         """
         :param device_id: The OAK device serial number string, or None to pick the first available.
@@ -163,10 +182,10 @@ class USBWebcamCamera(FrameGrabber):
 
     def __init__(
         self,
-        device_index: int = 0,
-        width: int = 1280,
-        height: int = 720,
-        fps: int = 30,
+        device_index: int = USB_DEVICE_INDEX,
+        width: int = USB_FRAME_WIDTH,
+        height: int = USB_FRAME_HEIGHT,
+        fps: int = USB_FPS,
     ) -> None:
         """
         :param device_index: OpenCV device index (e.g. 0, 1, 2…).
@@ -218,6 +237,7 @@ def list_oak_devices() -> list[str]:
 
 
 oak_serials = list_oak_devices()
+print(f"OAK Serials: {oak_serials}")
 if len(oak_serials) < 2:
     raise RuntimeError("Less than two OAK-1 Max cameras were found. Please connect at least two.")
 
@@ -225,15 +245,29 @@ if len(oak_serials) < 2:
 left_oak_serial = oak_serials[0]
 right_oak_serial = oak_serials[1]
 
-# Instantiate the two OAK-1 Max cameras (depthai) and the USB webcam
-oak_left_camera = OAK1MaxCamera(device_id=left_oak_serial, width=640, height=480, fps=30)
+# Instantiate the two OAK-1 Max cameras (DepthAI) and the USB webcam
+oak_left_camera = OAK1MaxCamera(
+    device_id=left_oak_serial,
+    width=OAK_FRAME_WIDTH,
+    height=OAK_FRAME_HEIGHT,
+    fps=OAK_FPS,
+)
 oak_left_camera.start()
 
-oak_right_camera = OAK1MaxCamera(device_id=right_oak_serial, width=640, height=480, fps=30)
+oak_right_camera = OAK1MaxCamera(
+    device_id=right_oak_serial,
+    width=OAK_FRAME_WIDTH,
+    height=OAK_FRAME_HEIGHT,
+    fps=OAK_FPS,
+)
 oak_right_camera.start()
 
-# If your OBSBOT Meet 2 is not on index 0, change `device_index=0` to the correct index
-usb_webcam = USBWebcamCamera(device_index=1, width=1280, height=720, fps=30)
+usb_webcam = USBWebcamCamera(
+    device_index=USB_DEVICE_INDEX,
+    width=USB_FRAME_WIDTH,
+    height=USB_FRAME_HEIGHT,
+    fps=USB_FPS,
+)
 usb_webcam.start()
 
 
@@ -241,7 +275,7 @@ def mjpeg_stream_generator(camera: FrameGrabber) -> Generator[bytes, None, None]
     """
     Given a FrameGrabber, yield an MJPEG multipart stream forever.
     """
-    boundary = b"--frameboundary"
+    boundary = MJPEG_BOUNDARY
     while True:
         frame = camera.get_latest_frame()
         if frame is None:
