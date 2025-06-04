@@ -11,6 +11,9 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from measurement_demobau_with_aruco import calculate_dimensions, \
+    detect_aruco_markers_with_tracking
+
 # ============================================
 # KAMEREN- / INFERENZ-KONSTANTEN
 # ============================================
@@ -171,42 +174,25 @@ class USBWebcamCamera(FrameGrabber):
 # ============================================
 # DetectCamera (Bounding-Box-Inference)
 # ============================================
+
 class DetectCamera(FrameGrabber):
-    def __init__(
-        self,
-        base_cam: FrameGrabber,
-        engine_path: str,
-        model_input_size: int = YOLO_MODEL_INPUT_SIZE,
-        conf_thresh: float = YOLO_CONF_THRESH,
-        iou_thresh: float = YOLO_IOU_THRESH,
-        max_det: int = YOLO_MAX_DET,
-        device: str = YOLO_DEVICE,
-        skip_frames: int = SKIP_FRAMES,
-        batch_size: int = BATCH_SIZE,
-    ) -> None:
+    """
+    Wraps a raw USB frame grabber with YOLO-detect (TensorRT FP16, imgsz=320).
+    Also runs ArUco to compute pixel→mm ratio.
+    """
+
+    def __init__(self, base_cam: FrameGrabber, engine_path: str, ...):
         super().__init__()
         self.base_cam = base_cam
-        self.model_input_size = model_input_size
-        self.conf_thresh = conf_thresh
-        self.iou_thresh = iou_thresh
-        self.max_det = max_det
-        self.device = device
-        self.skip_frames = skip_frames
-        self.batch_size = batch_size
-
-        # YOLO-Detect-Engine
-        self.model = YOLO(engine_path, task="detect")
-        self.model.overrides["imgsz"]   = (model_input_size, model_input_size)
-        self.model.overrides["conf"]    = conf_thresh
-        self.model.overrides["iou"]     = iou_thresh
-        self.model.overrides["max_det"] = max_det
-
-        self._lock = threading.Lock()
-        self._latest_annotated_320: Optional[np.ndarray] = None
-        self._is_running = False
+        self.model = YOLO(engine_path)
+        self.model.overrides["imgsz"] = (YOLO_MODEL_INPUT_SIZE, YOLO_MODEL_INPUT_SIZE)
+        ...
+        self.last_known_ratio = None  # store pixel/mm ratio
         self._frame_counter = 0
+        self._latest_annotated = None
+        self._lock = threading.Lock()
 
-    def start(self) -> None:
+    def start(self):
         self.base_cam.start()
         if self._is_running:
             return
@@ -214,99 +200,87 @@ class DetectCamera(FrameGrabber):
         self._thread = threading.Thread(target=self._inference_loop, daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self):
         self._is_running = False
         if hasattr(self, "_thread"):
             self._thread.join(timeout=1.0)
 
-    def _inference_loop(self) -> None:
+    def _inference_loop(self):
         while self._is_running:
-            raw_full = self.base_cam.get_latest_frame()
-            if raw_full is None:
+            raw = self.base_cam.get_latest_frame()  # full-res BGR
+            if raw is None:
                 time.sleep(0.001)
                 continue
 
+            # 1) ArUco detection once per frame (full resolution)
+            ratio, _ = detect_aruco_markers_with_tracking(raw)
+            if ratio is not None:
+                self.last_known_ratio = ratio
+
+            # 2) Skip frames if desired
             self._frame_counter += 1
-            if (self._frame_counter % self.skip_frames) != 0:
+            if (self._frame_counter % SKIP_FRAMES) != 0:
                 time.sleep(0.001)
                 continue
 
-            frame_320 = cv2.resize(
-                raw_full,
-                (self.model_input_size, self.model_input_size),
-                interpolation=cv2.INTER_LINEAR,
-            )
-            img_rgb = cv2.cvtColor(frame_320, cv2.COLOR_BGR2RGB)
+            # 3) Downsample to 320×320
+            frame320 = cv2.resize(raw,
+                                  (YOLO_MODEL_INPUT_SIZE, YOLO_MODEL_INPUT_SIZE),
+                                  interpolation=cv2.INTER_LINEAR)
 
+            # 4) Run YOLO-detect
             results = self.model.predict(
-                source=[img_rgb],
-                imgsz=self.model_input_size,
-                device=self.device,
-                conf=self.conf_thresh,
-                iou=self.iou_thresh,
-                max_det=self.max_det,
+                source=[frame320],
+                imgsz=YOLO_MODEL_INPUT_SIZE,
+                device=YOLO_DEVICE,
+                conf=YOLO_CONF_THRESH,
+                iou=YOLO_IOU_THRESH,
+                max_det=YOLO_MAX_DET,
                 augment=False,
                 verbose=False,
             )
 
-            annotated_320 = frame_320.copy()
+            # 5) Draw detections on 320×320 crop, including real-world dims
+            annotated = frame320.copy()
             dets = results[0].boxes  # type: ignore[attr-defined]
             if dets is not None and len(dets) > 0:
-                xyxy_array   = dets.xyxy.cpu().numpy()
-                conf_array   = dets.conf.cpu().numpy()
-                classes_arr  = dets.cls.cpu().numpy().astype(int)
+                xyxy = dets.xyxy.cpu().numpy().astype(int)
+                confs = dets.conf.cpu().numpy()
+                classes = dets.cls.cpu().numpy().astype(int)
 
-                for box, c, cls_id in zip(xyxy_array, conf_array, classes_arr):
-                    x1, y1, x2, y2 = box.astype(int)
+                for (x1, y1, x2, y2), conf, cls_id in zip(xyxy, confs, classes):
+                    # lookup name
                     try:
-                        class_name = self.model.names[cls_id]
+                        cls_name = self.model.names[cls_id]
                     except (KeyError, IndexError):
-                        class_name = f"class{cls_id}"
-                    label = f"{class_name} {c:.2f}"
+                        cls_name = f"class{cls_id}"
 
-                    cv2.rectangle(annotated_320, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    t_size = cv2.getTextSize(label, 0, fontScale=0.4, thickness=1)[0]
-                    cv2.rectangle(
-                        annotated_320,
-                        (x1, y1 - t_size[1] - 4),
-                        (x1 + t_size[0], y1),
-                        (0, 255, 0),
-                        -1,
-                    )
-                    cv2.putText(
-                        annotated_320,
-                        label,
-                        (x1, y1 - 2),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.4,
-                        (0, 0, 0),
-                        thickness=1,
-                    )
+                    # compute mm dims if we have a ratio
+                    if self.last_known_ratio is not None:
+                        w_mm, h_mm = calculate_dimensions([x1, y1, x2, y2], self.last_known_ratio)
+                        label = f"{cls_name} {conf:.2f}: {w_mm:.1f}mm×{h_mm:.1f}mm"
+                    else:
+                        label = f"{cls_name} {conf:.2f}"
 
-            # ------------------------------------
-            # Frame-Nummer für die Center-Kamera einblenden
-            # ------------------------------------
-            text = f"Center Cam Frame #{self._frame_counter}"
-            cv2.putText(
-                annotated_320,
-                text,
-                (5, 15),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (255, 255, 255),
-                thickness=1,
-            )
+                    # draw box + label
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    tsz, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+                    cv2.rectangle(annotated,
+                                  (x1, y1 - tsz[1] - 4),
+                                  (x1 + tsz[0], y1),
+                                  (0, 255, 0), -1)
+                    cv2.putText(annotated, label, (x1, y1 - 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
 
+            # 6) Store latest annotated frame
             with self._lock:
-                self._latest_annotated_320 = annotated_320
+                self._latest_annotated = annotated
 
             time.sleep(0.001)
 
-    def get_latest_frame(self) -> Optional[np.ndarray]:
+    def get_latest_frame(self):
         with self._lock:
-            if self._latest_annotated_320 is None:
-                return None
-            return self._latest_annotated_320.copy()
+            return None if self._latest_annotated is None else self._latest_annotated.copy()
 
 
 # ============================================
