@@ -1,5 +1,3 @@
-# main.py
-
 import threading
 import time
 from typing import Generator, Optional
@@ -32,7 +30,7 @@ USB_CAPTURE_FPS:           int   = 30
 YOLO_ENGINE_CENTER:        str   = "/home/sys180/models/custom_320_FP16_detect.engine"
 
 # YOLO-Inference-Grundeinstellungen
-YOLO_MODEL_INPUT_SIZE:     int   = 320   # <-- neu hinzugefügt
+YOLO_MODEL_INPUT_SIZE:     int   = 320   # <-- Wichtig: neu definiert
 YOLO_CONF_THRESH:          float = 0.25
 YOLO_IOU_THRESH:           float = 0.45
 YOLO_MAX_DET:              int   = 300
@@ -41,10 +39,10 @@ YOLO_DEVICE:               str   = "cuda"
 # MJPEG-Boundary
 MJPEG_BOUNDARY:            bytes = b"--frameboundary"
 
-# Inferenz-Frequenz (skip N-1 Frames; wenn USB 30 FPS, skip_frames=5 → ca. 6 Inferenzen pro Sekunde)
+# Inferenz-Frequenz (skip N-1 Frames)
 SKIP_FRAMES:               int   = 5
 
-# Batch-Größe (derzeit 1, kann bei Bedarf auf >1 gesetzt werden)
+# Batch-Größe
 BATCH_SIZE:                int   = 1
 
 
@@ -60,19 +58,12 @@ templates = Jinja2Templates(directory="templates")
 # Basisklasse: FrameGrabber
 # ============================================
 class FrameGrabber:
-    """
-    Basisklasse für eine Kamera, die im Hintergrund Frames abruft
-    und immer nur das zuletzt gelesene Frame speichert.
-    """
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
         self._is_running = False
 
     def start(self) -> None:
-        """
-        Thread starten, der kontinuierlich Frames abruft.
-        """
         if self._is_running:
             return
         self._is_running = True
@@ -80,32 +71,20 @@ class FrameGrabber:
         self._thread.start()
 
     def stop(self) -> None:
-        """
-        Thread anhalten.
-        """
         self._is_running = False
         if hasattr(self, "_thread"):
             self._thread.join(timeout=1.0)
 
     def _capture_loop(self) -> None:
-        """
-        Muss von Unterklassen überschrieben werden. Setzt self._latest_frame.
-        """
         raise NotImplementedError("Subclasses must implement _capture_loop")
 
     def get_latest_frame(self) -> Optional[np.ndarray]:
-        """
-        Gibt das aktuellste Frame (BGR) zurück, oder None.
-        """
         with self._lock:
             if self._latest_frame is None:
                 return None
             return self._latest_frame.copy()
 
     def _set_frame(self, frame: np.ndarray) -> None:
-        """
-        Intern: Speichert das neueste Frame.
-        """
         with self._lock:
             self._latest_frame = frame
 
@@ -114,16 +93,7 @@ class FrameGrabber:
 # OAK-1 Max Camera (nur Raw-Frames)
 # ============================================
 class OAK1MaxCamera(FrameGrabber):
-    """
-    Implementierung für OAK-1 Max (DepthAI). Liefert Vorschau-Frames in BGR.
-    """
-    def __init__(
-        self,
-        device_id: Optional[str],
-        width: int = OAK_FRAME_WIDTH,
-        height: int = OAK_FRAME_HEIGHT,
-        fps: int = OAK_FPS
-    ) -> None:
+    def __init__(self, device_id: Optional[str], width: int = OAK_FRAME_WIDTH, height: int = OAK_FRAME_HEIGHT, fps: int = OAK_FPS) -> None:
         super().__init__()
         self._device_id = device_id
         self._frame_width = width
@@ -166,23 +136,14 @@ class OAK1MaxCamera(FrameGrabber):
                 frame_bgr = packet.getCvFrame()
                 if frame_bgr is not None:
                     self._set_frame(frame_bgr)
-            time.sleep(0.001)  # CPU schonen
+            time.sleep(0.001)
 
 
 # ============================================
 # USB-Webcam (nur Raw-Frames)
 # ============================================
 class USBWebcamCamera(FrameGrabber):
-    """
-    FrameGrabber-Implementierung für eine Standard-USB-Webcam via OpenCV.
-    """
-    def __init__(
-        self,
-        device_index: int = USB_DEVICE_INDEX,
-        width: int = USB_CAPTURE_WIDTH,
-        height: int = USB_CAPTURE_HEIGHT,
-        fps: int = USB_CAPTURE_FPS
-    ) -> None:
+    def __init__(self, device_index: int = USB_DEVICE_INDEX, width: int = USB_CAPTURE_WIDTH, height: int = USB_CAPTURE_HEIGHT, fps: int = USB_CAPTURE_FPS) -> None:
         super().__init__()
         self._device_index = device_index
         self._capture = cv2.VideoCapture(self._device_index, cv2.CAP_ANY)
@@ -208,17 +169,9 @@ class USBWebcamCamera(FrameGrabber):
 
 
 # ============================================
-# DetectCamera (Bounding-Box-Inference auf 320×320)
+# DetectCamera (Bounding-Box-Inference)
 # ============================================
 class DetectCamera(FrameGrabber):
-    """
-    Wrappt einen Roh-FrameGrabber (z.B. USBWebcamCamera) mit YOLO-Engine für Bounding-Boxes.
-    1) Holt 640×480 Frame von USB.
-    2) Down‐sample auf 320×320 und BGR→RGB.
-    3) Führt YOLO-Detect auf 320×320 aus.
-    4) Zeichnet Rectangle + Label auf das 320×320.
-    5) Speichert zuletzt annotiertes 320×320 Frame.
-    """
     def __init__(
         self,
         base_cam: FrameGrabber,
@@ -241,7 +194,7 @@ class DetectCamera(FrameGrabber):
         self.skip_frames = skip_frames
         self.batch_size = batch_size
 
-        # YOLO-Detect-Engine (Bounding-Box-Modus)
+        # YOLO-Detect-Engine
         self.model = YOLO(engine_path, task="detect")
         self.model.overrides["imgsz"]   = (model_input_size, model_input_size)
         self.model.overrides["conf"]    = conf_thresh
@@ -278,7 +231,6 @@ class DetectCamera(FrameGrabber):
                 time.sleep(0.001)
                 continue
 
-            # 1) Down-sample auf 320×320
             frame_320 = cv2.resize(
                 raw_full,
                 (self.model_input_size, self.model_input_size),
@@ -286,7 +238,6 @@ class DetectCamera(FrameGrabber):
             )
             img_rgb = cv2.cvtColor(frame_320, cv2.COLOR_BGR2RGB)
 
-            # 2) YOLO Detect Inferenz
             results = self.model.predict(
                 source=[img_rgb],
                 imgsz=self.model_input_size,
@@ -298,13 +249,12 @@ class DetectCamera(FrameGrabber):
                 verbose=False,
             )
 
-            # 3) Bounding-Boxes zeichnen
             annotated_320 = frame_320.copy()
             dets = results[0].boxes  # type: ignore[attr-defined]
             if dets is not None and len(dets) > 0:
-                xyxy_array  = dets.xyxy.cpu().numpy()
-                conf_array  = dets.conf.cpu().numpy()
-                classes_arr = dets.cls.cpu().numpy().astype(int)
+                xyxy_array   = dets.xyxy.cpu().numpy()
+                conf_array   = dets.conf.cpu().numpy()
+                classes_arr  = dets.cls.cpu().numpy().astype(int)
 
                 for box, c, cls_id in zip(xyxy_array, conf_array, classes_arr):
                     x1, y1, x2, y2 = box.astype(int)
@@ -333,7 +283,20 @@ class DetectCamera(FrameGrabber):
                         thickness=1,
                     )
 
-            # 4) Speichern
+            # ------------------------------------
+            # Frame-Nummer für die Center-Kamera einblenden
+            # ------------------------------------
+            text = f"Center Cam Frame #{self._frame_counter}"
+            cv2.putText(
+                annotated_320,
+                text,
+                (5, 15),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                thickness=1,
+            )
+
             with self._lock:
                 self._latest_annotated_320 = annotated_320
 
@@ -347,17 +310,9 @@ class DetectCamera(FrameGrabber):
 
 
 # ============================================
-# SegmentCamera (Masken-Inference auf 320×320)
+# SegmentCamera (Masken-Inference)
 # ============================================
 class SegmentCamera(FrameGrabber):
-    """
-    Wrappt einen Roh-FrameGrabber (z.B. OAK1MaxCamera) mit YOLO-Engine für Segmentierung.
-    1) Holt 640×480 Frame von OAK.
-    2) Down‐sample auf 320×320 und BGR→RGB.
-    3) Führt YOLO-Segment-Inferenz auf 320×320 aus.
-    4) Malt Masken-Overlay (halbtransparent) auf das 320×320.
-    5) Speichert zuletzt annotiertes 320×320 Frame (BGR).
-    """
     def __init__(
         self,
         base_cam: FrameGrabber,
@@ -380,7 +335,7 @@ class SegmentCamera(FrameGrabber):
         self.skip_frames = skip_frames
         self.batch_size = batch_size
 
-        # YOLO-Segment-Engine (task="segment")
+        # YOLO-Segment-Engine
         self.model = YOLO(engine_path, task="segment")
         self.model.overrides["imgsz"]   = (model_input_size, model_input_size)
         self.model.overrides["conf"]    = conf_thresh
@@ -417,7 +372,6 @@ class SegmentCamera(FrameGrabber):
                 time.sleep(0.001)
                 continue
 
-            # 1) Down-sample auf 320×320
             frame_320 = cv2.resize(
                 raw_full,
                 (self.model_input_size, self.model_input_size),
@@ -425,7 +379,6 @@ class SegmentCamera(FrameGrabber):
             )
             img_rgb = cv2.cvtColor(frame_320, cv2.COLOR_BGR2RGB)
 
-            # 2) YOLO Segment Inferenz
             results = self.model.predict(
                 source=[img_rgb],
                 imgsz=self.model_input_size,
@@ -437,11 +390,27 @@ class SegmentCamera(FrameGrabber):
                 verbose=False,
             )
 
-            # 3) Masken-Overlay zeichnen (Ultralytics .plot())
-            seg_overlay_rgb = results[0].plot()  # 320×320 RGB mit Masken-Overlay
+            seg_overlay_rgb = results[0].plot()
             annotated_320 = cv2.cvtColor(seg_overlay_rgb, cv2.COLOR_RGB2BGR)
 
-            # 4) Speichern
+            # ------------------------------------
+            # Frame-Nummer für Left/Right-Kameras einblenden
+            # ------------------------------------
+            # Hier nehme ich an, dass engine_path schon beides unterscheidet.
+            # Empfehlenswert: beim Erzeugen von SegmentCamera einen camera_name übergeben.
+            label = f"Frame #{self._frame_counter}"
+            # Wenn Sie spezifisch „Left“ oder „Right“ anzeigen wollen, können Sie
+            # beim Instanziieren z. B. segment_cam_left = SegmentCamera(..., camera_name="Left")
+            cv2.putText(
+                annotated_320,
+                label,
+                (5, 15),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                thickness=1,
+            )
+
             with self._lock:
                 self._latest_annotated_320 = annotated_320
 
@@ -455,7 +424,7 @@ class SegmentCamera(FrameGrabber):
 
 
 # ============================================
-# Hilfsfunktion: Alle OAK-Seriennummern finden
+# Alle OAK-Seriennummern auslesen
 # ============================================
 def list_oak_devices() -> list[str]:
     return [device_info.getMxId() for device_info in dai.Device.getAllAvailableDevices()]
@@ -464,17 +433,16 @@ def list_oak_devices() -> list[str]:
 oak_serials = list_oak_devices()
 print(f"OAK Serials: {oak_serials}")
 if len(oak_serials) < 2:
-    raise RuntimeError("Weniger als zwei OAK-1 Max Kameras gefunden. Bitte zwei anschließen.")
+    raise RuntimeError("Weniger als zwei OAK-1 Max Kameras gefunden. Bitte mindestens zwei anschließen.")
 
 left_oak_serial  = oak_serials[0]
 right_oak_serial = oak_serials[1]
 
 
 # ============================================
-# Instanziiere alle Kameras
+# Kameras instanziieren & starten
 # ============================================
-# 1) Raw OAK-Links (nur SegmentCam)
-oak_left_raw   = OAK1MaxCamera(device_id=left_oak_serial,  width=OAK_FRAME_WIDTH, height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
+oak_left_raw   = OAK1MaxCamera(device_id=left_oak_serial,  width=OAK_FRAME_WIDTH,  height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
 oak_left_seg   = SegmentCamera(
     base_cam=oak_left_raw,
     engine_path=YOLO_ENGINE_LEFT,
@@ -484,11 +452,10 @@ oak_left_seg   = SegmentCamera(
     max_det=YOLO_MAX_DET,
     device=YOLO_DEVICE,
     skip_frames=SKIP_FRAMES,
-    batch_size=BATCH_SIZE,
+    batch_size=BATCH_SIZE
 )
 
-# 2) Raw OAK-Rechts (nur SegmentCam)
-oak_right_raw  = OAK1MaxCamera(device_id=right_oak_serial, width=OAK_FRAME_WIDTH, height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
+oak_right_raw  = OAK1MaxCamera(device_id=right_oak_serial, width=OAK_FRAME_WIDTH,  height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
 oak_right_seg  = SegmentCamera(
     base_cam=oak_right_raw,
     engine_path=YOLO_ENGINE_RIGHT,
@@ -498,10 +465,9 @@ oak_right_seg  = SegmentCamera(
     max_det=YOLO_MAX_DET,
     device=YOLO_DEVICE,
     skip_frames=SKIP_FRAMES,
-    batch_size=BATCH_SIZE,
+    batch_size=BATCH_SIZE
 )
 
-# 3) Raw USB-Webcam (DetectCam)
 usb_center_raw    = USBWebcamCamera(device_index=USB_DEVICE_INDEX, width=USB_CAPTURE_WIDTH, height=USB_CAPTURE_HEIGHT, fps=USB_CAPTURE_FPS)
 usb_center_detect = DetectCamera(
     base_cam=usb_center_raw,
@@ -512,16 +478,15 @@ usb_center_detect = DetectCamera(
     max_det=YOLO_MAX_DET,
     device=YOLO_DEVICE,
     skip_frames=SKIP_FRAMES,
-    batch_size=BATCH_SIZE,
+    batch_size=BATCH_SIZE
 )
 
-# 4) Starte alle Threads
 oak_left_raw.start()
-oak_left_seg.start()        # OAK Left segmentiert
+oak_left_seg.start()
 oak_right_raw.start()
-oak_right_seg.start()       # OAK Right segmentiert
+oak_right_seg.start()
 usb_center_raw.start()
-usb_center_detect.start()   # USB-Webcam detektiert
+usb_center_detect.start()
 
 
 # ============================================
@@ -554,7 +519,6 @@ def mjpeg_stream_generator(camera: FrameGrabber) -> Generator[bytes, None, None]
 # ============================================
 # FASTAPI-Routen
 # ============================================
-
 @app.get("/", response_class=Response)
 def index(request: Request) -> Response:
     return templates.TemplateResponse("index.html", {"request": request})
@@ -562,7 +526,7 @@ def index(request: Request) -> Response:
 
 @app.get("/video_left")
 def video_left() -> StreamingResponse:
-    # Linke OAK: Segment (Masken-Overlay)
+    # Linke OAK: Masken-Overlay
     return StreamingResponse(
         mjpeg_stream_generator(oak_left_seg),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
@@ -571,7 +535,7 @@ def video_left() -> StreamingResponse:
 
 @app.get("/video_center")
 def video_center() -> StreamingResponse:
-    # USB-Webcam: Detect (Bounding-Boxes)
+    # USB-Webcam: Bounding-Box
     return StreamingResponse(
         mjpeg_stream_generator(usb_center_detect),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
@@ -580,7 +544,7 @@ def video_center() -> StreamingResponse:
 
 @app.get("/video_right")
 def video_right() -> StreamingResponse:
-    # Rechte OAK: Segment (Masken-Overlay)
+    # Rechte OAK: Masken-Overlay
     return StreamingResponse(
         mjpeg_stream_generator(oak_right_seg),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
@@ -589,15 +553,12 @@ def video_right() -> StreamingResponse:
 
 @app.on_event("shutdown")
 def cleanup_cameras() -> None:
-    usb_center_detect.stop()  # stoppt implizit usb_center_raw
-    oak_left_seg.stop()       # stoppt implizit oak_left_raw
-    oak_right_seg.stop()      # stoppt implizit oak_right_raw
+    usb_center_detect.stop()
+    oak_left_seg.stop()
+    oak_right_seg.stop()
     time.sleep(0.5)
 
 
-# ============================================
-# ENTRYPOINT
-# ============================================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
