@@ -4,28 +4,26 @@
     <meta charset="UTF-8" />
     <title>Three-Camera View</title>
     <style>
-        /* Basic reset */
+        /* --- Grundlegende Reset-Stile --- */
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-
         html, body {
             height: 100%;
             font-family: Arial, sans-serif;
             background-color: #f0f0f0;
         }
 
+        /* --- Kamera-Container --- */
         .container {
             display: flex;
             flex-direction: row;
             justify-content: space-around;
             align-items: flex-start;
             padding: 20px;
-            height: 100%;
         }
-
         .camera-panel {
             background-color: #ffffff;
             border-radius: 8px;
@@ -35,14 +33,16 @@
             flex-direction: column;
             align-items: center;
             padding: 10px;
+            margin-bottom: 20px;
         }
-
         .camera-panel h2 {
             margin-bottom: 10px;
             font-size: 1.25rem;
             text-align: center;
+            border-bottom: 2px solid #ddd;
+            padding-bottom: 8px;
+            width: 100%;
         }
-
         .camera-panel img {
             border: 2px solid #ddd;
             border-radius: 4px;
@@ -50,26 +50,143 @@
             height: auto;
         }
 
+        /* --- Responsive Layout --- */
         @media (max-width: 1200px) {
             .camera-panel {
                 width: 32%;
             }
         }
-
         @media (max-width: 900px) {
-            /* On smaller screens, stack vertically */
             .container {
                 flex-direction: column;
                 align-items: center;
             }
             .camera-panel {
                 width: 80%;
-                margin-bottom: 20px;
             }
+        }
+
+        /* --- Abschnitt "Fehlertypen" --- */
+        .features-section {
+            width: 100%;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+            margin: 0 auto 30px auto;
+            padding: 20px;
+            max-width: 1200px;
+        }
+        .features-section h3 {
+            text-align: center;
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            color: #333333;
+            border-bottom: 2px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .features-grid {
+            display: flex;
+            justify-content: space-evenly;
+            flex-wrap: wrap;
+        }
+        .feature-btn {
+            background-color: #ffffff;
+            border: none;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            width: 150px;
+            height: 150px;
+            margin: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.1s ease-in-out;
+            cursor: pointer;
+        }
+        .feature-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        .icon-circle {
+            background-color: #7FC97F;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 10px;
+            font-size: 1.5rem;
+            color: #ffffff;
+        }
+        .feature-label {
+            text-align: center;
+            font-size: 0.95rem;
+            color: #333333;
+        }
+
+        /* --- Save-Button --- */
+        #save-btn {
+            background-color: #28a745;
+            color: #ffffff;
+            border: none;
+            border-radius: 5px;
+            padding: 12px 24px;
+            font-size: 1rem;
+            cursor: pointer;
+            margin: 20px auto;
+            display: block;
+            transition: background-color 0.2s ease-in-out;
+        }
+        #save-btn:hover {
+            background-color: #218838;
+        }
+
+        /* --- Status-Leiste --- */
+        #status-bar {
+            background-color: #ffffff;
+            border-left: 5px solid #28a745;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px auto;
+            max-width: 800px;
+            display: flex;
+            align-items: center;
+            color: #333333;
+            font-size: 1rem;
+        }
+        #status-bar.connected::before {
+            content: "✔ ";
+            color: #28a745;
+            margin-right: 8px;
+        }
+        #status-bar.disconnected::before {
+            content: "✖ ";
+            color: #dc3545;
+            margin-right: 8px;
+        }
+
+        /* --- Restart-Button --- */
+        #restart-btn {
+            background-color: #fd7e14;
+            color: #ffffff;
+            border: none;
+            border-radius: 5px;
+            padding: 12px 24px;
+            font-size: 1rem;
+            cursor: pointer;
+            margin: 20px auto 40px auto;
+            display: block;
+            transition: background-color 0.2s ease-in-out;
+        }
+        #restart-btn:hover {
+            background-color: #e8590c;
         }
     </style>
 </head>
 <body>
+    <!-- Three-Camera Panels -->
     <div class="container">
         <!-- Left OAK-1 Max -->
         <div class="camera-panel">
@@ -79,7 +196,7 @@
 
         <!-- Center USB Webcam -->
         <div class="camera-panel">
-            <h2>OBSBOT Meet 2 (Mitte)</h2>
+            <h2>Logitech Webcam mit Aruco-Messung</h2>
             <img src="/video_center" alt="Center USB Webcam Stream" />
         </div>
 
@@ -89,5 +206,48 @@
             <img src="/video_right" alt="Right OAK-1 Max Stream" />
         </div>
     </div>
+
+    <!-- Features-Section -->
+    <div class="features-section">
+        <h3>Fehlertypen</h3>
+        <div class="features-grid">
+            <!-- KI-Zustandserkennung -->
+            <button class="feature-btn">
+                <div class="icon-circle">🤖</div>
+                <div class="feature-label">KI-<br>Zustandserkennung</div>
+            </button>
+            <!-- Verbogen -->
+            <button class="feature-btn">
+                <div class="icon-circle">↗️</div>
+                <div class="feature-label">Verbogen</div>
+            </button>
+            <!-- Delle -->
+            <button class="feature-btn">
+                <div class="icon-circle">⚙️</div>
+                <div class="feature-label">Delle</div>
+            </button>
+            <!-- Kratzer -->
+            <button class="feature-btn">
+                <div class="icon-circle">✂️</div>
+                <div class="feature-label">Kratzer</div>
+            </button>
+            <!-- Verschmutzt -->
+            <button class="feature-btn">
+                <div class="icon-circle">🧹</div>
+                <div class="feature-label">Verschmutzt</div>
+            </button>
+        </div>
+    </div>
+
+    <!-- Save-Detections Button -->
+    <button id="save-btn">Save Current Detections to DataFrame</button>
+
+    <!-- Status-Bar -->
+    <div id="status-bar" class="connected">
+        Verbunden. Bereit für Fehlererkennung.
+    </div>
+
+    <!-- Restart-Button -->
+    <button id="restart-btn">🔄 System neu starten</button>
 </body>
 </html>
