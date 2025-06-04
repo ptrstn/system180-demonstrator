@@ -23,16 +23,16 @@ from aruco_utils import detect_aruco_markers_with_tracking, calculate_dimensions
 OAK_FRAME_WIDTH:        int   = 640
 OAK_FRAME_HEIGHT:       int   = 480
 OAK_FPS:                int   = 30
-YOLO_ENGINE_LEFT:       str   = "/home/sys180/models/NubsUpDown_320_FP16_segment.engine"
-YOLO_ENGINE_RIGHT:      str   = "/home/sys180/models/NubsUpDown_320_FP16_segment.engine"
+YOLO_ENGINE_LEFT:       str   = "./models/NubsUpDown_320_FP16_segment.engine"
+YOLO_ENGINE_RIGHT:      str   = "./models/NubsUpDown_320_FP16_segment.engine"
 
 # USB-Webcam (CENTER detektieren, Ensemble-Prediction)
 USB_DEVICE_INDEX:       int   = 0
 USB_CAPTURE_WIDTH:      int   = 640
 USB_CAPTURE_HEIGHT:     int   = 480
 USB_CAPTURE_FPS:        int   = 30
-YOLO_ENGINE_CENTER_1:   str   = "/home/sys180/models/custom_320_FP16_detect.engine"
-YOLO_ENGINE_CENTER_2:   str   = "/home/sys180/models/synthetic_320_FP16_detect.engine"
+YOLO_ENGINE_CENTER_1:   str   = "./models/custom_320_FP16_detect.engine"
+YOLO_ENGINE_CENTER_2:   str   = "./models/synthetic_320_FP16_detect.engine"
 
 # YOLO-Inference-Grundeinstellungen
 YOLO_MODEL_INPUT_SIZE:  int   = 320
