@@ -26,12 +26,13 @@ OAK_FPS:                int   = 30
 YOLO_ENGINE_LEFT:       str   = "/home/sys180/models/NubsUpDown_320_FP16_segment.engine"
 YOLO_ENGINE_RIGHT:      str   = "/home/sys180/models/NubsUpDown_320_FP16_segment.engine"
 
-# USB-Webcam (CENTER detektieren)
+# USB-Webcam (CENTER detektieren, Ensemble-Prediction)
 USB_DEVICE_INDEX:       int   = 0
 USB_CAPTURE_WIDTH:      int   = 640
 USB_CAPTURE_HEIGHT:     int   = 480
 USB_CAPTURE_FPS:        int   = 30
-YOLO_ENGINE_CENTER:     str   = "/home/sys180/models/custom_320_FP16_detect.engine"
+YOLO_ENGINE_CENTER_1:   str   = "/home/sys180/models/custom_320_FP16_detect.engine"
+YOLO_ENGINE_CENTER_2:   str   = "/home/sys180/models/synthetic_320_FP16_detect.engine"
 
 # YOLO-Inference-Grundeinstellungen
 YOLO_MODEL_INPUT_SIZE:  int   = 320
@@ -214,19 +215,69 @@ class USBWebcamCamera(FrameGrabber):
 
 
 # ============================================
-# DetectCamera (Bounding-Box-Inference + ArUco + FPS)
+# Hilfspaket: Class-wise NMS
+# ============================================
+def class_wise_nms(boxes: np.ndarray,
+                   scores: np.ndarray,
+                   classes: np.ndarray,
+                   iou_thresh: float) -> list[int]:
+    """
+    Führt NMS pro Klasse durch.
+    boxes: np.ndarray mit Form (N,4) in [x1,y1,x2,y2]
+    scores: np.ndarray mit Form (N,)
+    classes: np.ndarray mit Form (N,)
+    iou_thresh: Schwellenwert für NMS
+    Rückgabe: Liste der Indizes, die beibehalten werden.
+    """
+    keep_indices: list[int] = []
+    unique_classes = np.unique(classes)
+    for cls in unique_classes:
+        inds = np.where(classes == cls)[0]
+        cls_boxes = boxes[inds]
+        cls_scores = scores[inds]
+        order = cls_scores.argsort()[::-1]
+        suppressed = np.zeros(len(inds), dtype=bool)
+        for i_idx in range(len(order)):
+            if suppressed[order[i_idx]]:
+                continue
+            keep_idx = inds[order[i_idx]]
+            keep_indices.append(keep_idx)
+            box_i = cls_boxes[order[i_idx]]
+            for j_idx in range(i_idx + 1, len(order)):
+                if suppressed[order[j_idx]]:
+                    continue
+                box_j = cls_boxes[order[j_idx]]
+                # IoU berechnen
+                xx1 = max(box_i[0], box_j[0])
+                yy1 = max(box_i[1], box_j[1])
+                xx2 = min(box_i[2], box_j[2])
+                yy2 = min(box_i[3], box_j[3])
+                w = max(0.0, xx2 - xx1)
+                h = max(0.0, yy2 - yy1)
+                inter = w * h
+                area_i = (box_i[2] - box_i[0]) * (box_i[3] - box_i[1])
+                area_j = (box_j[2] - box_j[0]) * (box_j[3] - box_j[1])
+                union = area_i + area_j - inter
+                iou = inter / union if union > 0 else 0.0
+                if iou > iou_thresh:
+                    suppressed[order[j_idx]] = True
+    return keep_indices
+
+
+# ============================================
+# DetectCamera mit Ensemble-Prediction
 # ============================================
 class DetectCamera(FrameGrabber):
     """
-    Wrappt einen Roh-FrameGrabber (z.B. USBWebcamCamera) mit YOLO-Engine für Bounding-Boxes.
-    Zusätzlich führt es ArUco-Erkennung – auf 320×320 Resize – nur alle ARUCO_SKIP_FRAMES aus,
-    um Pixel→mm-Ratio zu berechnen und reale Maße neben jedem Box-Label anzuzeigen.
-    Außerdem berechnet und zeigt es FPS zwischen zwei Inferenz-Durchläufen an.
+    Wrappt einen Roh-FrameGrabber (z.B. USBWebcamCamera) mit zwei YOLO-Engines für Ensemble-Prediction.
+    Zusätzlich führt es ArUco-Erkennung auf 320×320 aus (alle ARUCO_SKIP_FRAMES),
+    um Pixel→mm-Ratio zu berechnen. Zeigt reale Maße und FPS neben Box-Labels.
     """
     def __init__(
         self,
         base_cam: FrameGrabber,
-        engine_path: str,
+        engine_path1: str,
+        engine_path2: str,
         model_input_size: int = YOLO_MODEL_INPUT_SIZE,
         conf_thresh: float = YOLO_CONF_THRESH,
         iou_thresh: float = YOLO_IOU_THRESH,
@@ -245,12 +296,18 @@ class DetectCamera(FrameGrabber):
         self.skip_frames = skip_frames
         self.batch_size = batch_size
 
-        # YOLO-Detect-Engine (TensorRT FP16)
-        self.model = YOLO(engine_path, task="detect")
-        self.model.overrides["imgsz"]   = (model_input_size, model_input_size)
-        self.model.overrides["conf"]    = conf_thresh
-        self.model.overrides["iou"]     = iou_thresh
-        self.model.overrides["max_det"] = max_det
+        # Zwei YOLO-Detect-Engines (TensorRT FP16)
+        self.model1 = YOLO(engine_path1, task="detect")
+        self.model1.overrides["imgsz"]   = (model_input_size, model_input_size)
+        self.model1.overrides["conf"]    = conf_thresh
+        self.model1.overrides["iou"]     = iou_thresh
+        self.model1.overrides["max_det"] = max_det
+
+        self.model2 = YOLO(engine_path2, task="detect")
+        self.model2.overrides["imgsz"]   = (model_input_size, model_input_size)
+        self.model2.overrides["conf"]    = conf_thresh
+        self.model2.overrides["iou"]     = iou_thresh
+        self.model2.overrides["max_det"] = max_det
 
         self._lock = threading.Lock()
         self._latest_annotated: Optional[np.ndarray] = None
@@ -280,6 +337,7 @@ class DetectCamera(FrameGrabber):
                 time.sleep(0.001)
                 continue
 
+            # FPS berechnen
             current_time = time.time()
             dt = current_time - self._last_time
             if dt > 0:
@@ -288,7 +346,7 @@ class DetectCamera(FrameGrabber):
 
             self._frame_counter += 1
 
-            # 1) Downsample auf 320×320 und BGR→RGB (für Inferenz & ArUco)
+            # 1) Downsample auf 320×320 und BGR→RGB (für beide Modelle + ArUco)
             frame_320 = cv2.resize(
                 raw_full,
                 (self.model_input_size, self.model_input_size),
@@ -302,13 +360,23 @@ class DetectCamera(FrameGrabber):
                 if ratio is not None:
                     self.last_known_ratio = ratio
 
-            # 3) Skip-Frames-Logik für YOLO
+            # 3) Skip-Frames für YOLO
             if (self._frame_counter % self.skip_frames) != 0:
                 time.sleep(0.001)
                 continue
 
-            # 4) YOLO Detect Inferenz
-            results = self.model.predict(
+            # 4) Ensemble-Prediction: beide Modelle gleichzeitig inferieren
+            results1 = self.model1.predict(
+                source=[img_rgb],
+                imgsz=self.model_input_size,
+                device=self.device,
+                conf=self.conf_thresh,
+                iou=self.iou_thresh,
+                max_det=self.max_det,
+                augment=False,
+                verbose=False,
+            )
+            results2 = self.model2.predict(
                 source=[img_rgb],
                 imgsz=self.model_input_size,
                 device=self.device,
@@ -319,47 +387,70 @@ class DetectCamera(FrameGrabber):
                 verbose=False,
             )
 
-            # 5) Bounding-Boxes + reale Maße zeichnen
+            # 5) Extrahiere Boxen, Scores, Klassen beider Ergebnisse
+            boxes1   = results1[0].boxes.xyxy.cpu().numpy()
+            scores1  = results1[0].boxes.conf.cpu().numpy()
+            classes1 = results1[0].boxes.cls.cpu().numpy().astype(int)
+
+            boxes2   = results2[0].boxes.xyxy.cpu().numpy()
+            scores2  = results2[0].boxes.conf.cpu().numpy()
+            classes2 = results2[0].boxes.cls.cpu().numpy().astype(int)
+
+            if boxes1.size:
+                all_boxes   = np.vstack((boxes1, boxes2)) if boxes2.size else boxes1.copy()
+                all_scores  = np.hstack((scores1, scores2)) if scores2.size else scores1.copy()
+                all_classes = np.hstack((classes1, classes2)) if classes2.size else classes1.copy()
+            else:
+                all_boxes   = boxes2.copy()
+                all_scores  = scores2.copy()
+                all_classes = classes2.copy()
+
+            # 6) Gemeinsame NMS über alle Klassen
+            if all_boxes.size:
+                keep_inds = class_wise_nms(all_boxes, all_scores, all_classes, self.iou_thresh)
+                final_boxes   = all_boxes[keep_inds]
+                final_scores  = all_scores[keep_inds]
+                final_classes = all_classes[keep_inds]
+            else:
+                final_boxes   = np.zeros((0, 4), dtype=int)
+                final_scores  = np.zeros((0,), dtype=float)
+                final_classes = np.zeros((0,), dtype=int)
+
+            # 7) Zeichne die kombinierten Boxen
             annotated_320 = frame_320.copy()
-            dets = results[0].boxes  # type: ignore[attr-defined]
-            if dets is not None and len(dets) > 0:
-                xyxy_array = dets.xyxy.cpu().numpy().astype(int)
-                conf_array = dets.conf.cpu().numpy()
-                classes_arr = dets.cls.cpu().numpy().astype(int)
+            for (x1, y1, x2, y2), conf, cls_id in zip(final_boxes.astype(int), final_scores, final_classes):
+                try:
+                    class_name = self.model1.names[cls_id]
+                except (KeyError, IndexError):
+                    class_name = f"class{cls_id}"
 
-                for (x1, y1, x2, y2), conf, cls_id in zip(xyxy_array, conf_array, classes_arr):
-                    try:
-                        class_name = self.model.names[cls_id]
-                    except (KeyError, IndexError):
-                        class_name = f"class{cls_id}"
+                # Reale Maße falls Ratio bekannt
+                if self.last_known_ratio is not None:
+                    w_mm, h_mm = calculate_dimensions([x1, y1, x2, y2], self.last_known_ratio)
+                    label = f"{class_name} {conf:.2f}: {w_mm:.1f}mm×{h_mm:.1f}mm"
+                else:
+                    label = f"{class_name} {conf:.2f}"
 
-                    # Reale Breite/Höhe berechnen, falls Ratio bekannt
-                    if self.last_known_ratio is not None:
-                        w_mm, h_mm = calculate_dimensions([x1, y1, x2, y2], self.last_known_ratio)
-                        label = f"{class_name} {conf:.2f}: {w_mm:.1f}mm×{h_mm:.1f}mm"
-                    else:
-                        label = f"{class_name} {conf:.2f}"
+                cv2.rectangle(annotated_320, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+                cv2.rectangle(
+                    annotated_320,
+                    (x1, y1 - t_size[1] - 4),
+                    (x1 + t_size[0], y1),
+                    (0, 255, 0),
+                    -1,
+                )
+                cv2.putText(
+                    annotated_320,
+                    label,
+                    (x1, y1 - 2),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4,
+                    (0, 0, 0),
+                    thickness=1,
+                )
 
-                    cv2.rectangle(annotated_320, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
-                    cv2.rectangle(
-                        annotated_320,
-                        (x1, y1 - t_size[1] - 4),
-                        (x1 + t_size[0], y1),
-                        (0, 255, 0),
-                        -1,
-                    )
-                    cv2.putText(
-                        annotated_320,
-                        label,
-                        (x1, y1 - 2),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.4,
-                        (0, 0, 0),
-                        thickness=1,
-                    )
-
-            # 6) FPS-Anzeige und Frame-Nummer einblenden
+            # 8) FPS und Frame-Nummer einblenden
             fps_text = f"FPS: {self._fps:.1f}"
             cv2.putText(
                 annotated_320,
@@ -370,11 +461,10 @@ class DetectCamera(FrameGrabber):
                 (255, 255, 0),
                 thickness=1,
             )
-
-            text = f"Center Cam Frame #{self._frame_counter}"
+            frame_text = f"Center Cam Frame #{self._frame_counter}"
             cv2.putText(
                 annotated_320,
-                text,
+                frame_text,
                 (5, 15),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
@@ -382,7 +472,7 @@ class DetectCamera(FrameGrabber):
                 thickness=1,
             )
 
-            # 7) Speichern
+            # 9) Speichern
             with self._lock:
                 self._latest_annotated = annotated_320
 
@@ -578,7 +668,8 @@ oak_right_seg  = SegmentCamera(
 usb_center_raw    = USBWebcamCamera(device_index=USB_DEVICE_INDEX, width=USB_CAPTURE_WIDTH, height=USB_CAPTURE_HEIGHT, fps=USB_CAPTURE_FPS)
 usb_center_detect = DetectCamera(
     base_cam=usb_center_raw,
-    engine_path=YOLO_ENGINE_CENTER,
+    engine_path1=YOLO_ENGINE_CENTER_1,
+    engine_path2=YOLO_ENGINE_CENTER_2,
     model_input_size=YOLO_MODEL_INPUT_SIZE,
     conf_thresh=YOLO_CONF_THRESH,
     iou_thresh=YOLO_IOU_THRESH,
@@ -633,7 +724,7 @@ def index(request: Request) -> Response:
 
 @app.get("/video_left")
 def video_left() -> StreamingResponse:
-    # Linke OAK: Segment (Masken-Overlay)
+    # Linke OAK: Segment (Masken-Overlay + FPS)
     return StreamingResponse(
         mjpeg_stream_generator(oak_left_seg),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
@@ -642,7 +733,7 @@ def video_left() -> StreamingResponse:
 
 @app.get("/video_center")
 def video_center() -> StreamingResponse:
-    # USB-Webcam: Detect (Bounding-Boxes + reale Maße + FPS)
+    # USB-Webcam: Ensemble-Detect (Bounding-Boxes + reale Maße + FPS)
     return StreamingResponse(
         mjpeg_stream_generator(usb_center_detect),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
@@ -651,7 +742,7 @@ def video_center() -> StreamingResponse:
 
 @app.get("/video_right")
 def video_right() -> StreamingResponse:
-    # Rechte OAK: Segment (Masken-Overlay)
+    # Rechte OAK: Segment (Masken-Overlay + FPS)
     return StreamingResponse(
         mjpeg_stream_generator(oak_right_seg),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
