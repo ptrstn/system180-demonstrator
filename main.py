@@ -18,34 +18,34 @@ from fastapi.templating import Jinja2Templates
 # ============================================
 
 # OAK-1 Max (DepthAI) Kameraeinstellungen (LEFT & RIGHT segmentieren)
-OAK_FRAME_WIDTH:   int   = 640
-OAK_FRAME_HEIGHT:  int   = 480
-OAK_FPS:           int   = 30
-YOLO_ENGINE_LEFT:   str   = "/home/sys180/models/NubsUpDown_320_FP16_segment.engine"
-YOLO_ENGINE_RIGHT:  str   = "/home/sys180/models/NubsUpDown_320_FP16_segment.engine"
+OAK_FRAME_WIDTH:           int   = 640
+OAK_FRAME_HEIGHT:          int   = 480
+OAK_FPS:                   int   = 30
+YOLO_ENGINE_LEFT:          str   = "/home/sys180/models/NubsUpDown_320_FP16_segment.engine"
+YOLO_ENGINE_RIGHT:         str   = "/home/sys180/models/NubsUpDown_320_FP16_segment.engine"
 
 # USB-Webcam (CENTER detektieren)
-USB_DEVICE_INDEX:   int   = 0
-USB_CAPTURE_WIDTH:  int   = 640
-USB_CAPTURE_HEIGHT: int   = 480
-USB_CAPTURE_FPS:    int   = 30
-YOLO_ENGINE_CENTER: str   = "/home/sys180/models/custom_320_FP16_detect.engine"
+USB_DEVICE_INDEX:          int   = 0
+USB_CAPTURE_WIDTH:         int   = 640
+USB_CAPTURE_HEIGHT:        int   = 480
+USB_CAPTURE_FPS:           int   = 30
+YOLO_ENGINE_CENTER:        str   = "/home/sys180/models/custom_320_FP16_detect.engine"
 
-# YOLO-Inference-Grundeinstellungen (für Detect)
-YOLO_CONF_THRESH:   float = 0.25
-YOLO_IOU_THRESH:    float = 0.45
-YOLO_MAX_DET:       int   = 300
-YOLO_DEVICE:        str   = "cuda"
-YOLO_MODEL_INPUT_SIZE = 320
+# YOLO-Inference-Grundeinstellungen
+YOLO_MODEL_INPUT_SIZE:     int   = 320   # <-- neu hinzugefügt
+YOLO_CONF_THRESH:          float = 0.25
+YOLO_IOU_THRESH:           float = 0.45
+YOLO_MAX_DET:              int   = 300
+YOLO_DEVICE:               str   = "cuda"
 
 # MJPEG-Boundary
-MJPEG_BOUNDARY: bytes = b"--frameboundary"
+MJPEG_BOUNDARY:            bytes = b"--frameboundary"
 
 # Inferenz-Frequenz (skip N-1 Frames; wenn USB 30 FPS, skip_frames=5 → ca. 6 Inferenzen pro Sekunde)
-SKIP_FRAMES:       int = 5
+SKIP_FRAMES:               int   = 5
 
 # Batch-Größe (derzeit 1, kann bei Bedarf auf >1 gesetzt werden)
-BATCH_SIZE:        int = 1
+BATCH_SIZE:                int   = 1
 
 
 # ============================================
@@ -214,7 +214,7 @@ class DetectCamera(FrameGrabber):
     """
     Wrappt einen Roh-FrameGrabber (z.B. USBWebcamCamera) mit YOLO-Engine für Bounding-Boxes.
     1) Holt 640×480 Frame von USB.
-    2) Schneidet per ROI (320×320) vor.
+    2) Down‐sample auf 320×320 und BGR→RGB.
     3) Führt YOLO-Detect auf 320×320 aus.
     4) Zeichnet Rectangle + Label auf das 320×320.
     5) Speichert zuletzt annotiertes 320×320 Frame.
@@ -223,7 +223,7 @@ class DetectCamera(FrameGrabber):
         self,
         base_cam: FrameGrabber,
         engine_path: str,
-        model_input_size: int = 320,
+        model_input_size: int = YOLO_MODEL_INPUT_SIZE,
         conf_thresh: float = YOLO_CONF_THRESH,
         iou_thresh: float = YOLO_IOU_THRESH,
         max_det: int = YOLO_MAX_DET,
@@ -241,7 +241,7 @@ class DetectCamera(FrameGrabber):
         self.skip_frames = skip_frames
         self.batch_size = batch_size
 
-        # YOLO-Detect-Engine  (Bounding-Box-Modus)
+        # YOLO-Detect-Engine (Bounding-Box-Modus)
         self.model = YOLO(engine_path, task="detect")
         self.model.overrides["imgsz"]   = (model_input_size, model_input_size)
         self.model.overrides["conf"]    = conf_thresh
@@ -353,7 +353,7 @@ class SegmentCamera(FrameGrabber):
     """
     Wrappt einen Roh-FrameGrabber (z.B. OAK1MaxCamera) mit YOLO-Engine für Segmentierung.
     1) Holt 640×480 Frame von OAK.
-    2) Schneidet per ROI (320×320) vor.
+    2) Down‐sample auf 320×320 und BGR→RGB.
     3) Führt YOLO-Segment-Inferenz auf 320×320 aus.
     4) Malt Masken-Overlay (halbtransparent) auf das 320×320.
     5) Speichert zuletzt annotiertes 320×320 Frame (BGR).
@@ -362,7 +362,7 @@ class SegmentCamera(FrameGrabber):
         self,
         base_cam: FrameGrabber,
         engine_path: str,
-        model_input_size: int = 320,
+        model_input_size: int = YOLO_MODEL_INPUT_SIZE,
         conf_thresh: float = YOLO_CONF_THRESH,
         iou_thresh: float = YOLO_IOU_THRESH,
         max_det: int = YOLO_MAX_DET,
@@ -437,9 +437,8 @@ class SegmentCamera(FrameGrabber):
                 verbose=False,
             )
 
-            # 3) Masken-Overlay zeichnen
-            # Ultralytics liefert ein RGB-Bild mit Maske, wenn man plot() aufruft
-            seg_overlay_rgb = results[0].plot()  # 320×320, RGB mit halbtransparenter Maske
+            # 3) Masken-Overlay zeichnen (Ultralytics .plot())
+            seg_overlay_rgb = results[0].plot()  # 320×320 RGB mit Masken-Overlay
             annotated_320 = cv2.cvtColor(seg_overlay_rgb, cv2.COLOR_RGB2BGR)
 
             # 4) Speichern
@@ -475,8 +474,8 @@ right_oak_serial = oak_serials[1]
 # Instanziiere alle Kameras
 # ============================================
 # 1) Raw OAK-Links (nur SegmentCam)
-oak_left_raw  = OAK1MaxCamera(device_id=left_oak_serial,  width=OAK_FRAME_WIDTH, height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
-oak_left_seg  = SegmentCamera(
+oak_left_raw   = OAK1MaxCamera(device_id=left_oak_serial,  width=OAK_FRAME_WIDTH, height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
+oak_left_seg   = SegmentCamera(
     base_cam=oak_left_raw,
     engine_path=YOLO_ENGINE_LEFT,
     model_input_size=YOLO_MODEL_INPUT_SIZE,
@@ -489,8 +488,8 @@ oak_left_seg  = SegmentCamera(
 )
 
 # 2) Raw OAK-Rechts (nur SegmentCam)
-oak_right_raw = OAK1MaxCamera(device_id=right_oak_serial, width=OAK_FRAME_WIDTH, height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
-oak_right_seg = SegmentCamera(
+oak_right_raw  = OAK1MaxCamera(device_id=right_oak_serial, width=OAK_FRAME_WIDTH, height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
+oak_right_seg  = SegmentCamera(
     base_cam=oak_right_raw,
     engine_path=YOLO_ENGINE_RIGHT,
     model_input_size=YOLO_MODEL_INPUT_SIZE,
@@ -503,7 +502,7 @@ oak_right_seg = SegmentCamera(
 )
 
 # 3) Raw USB-Webcam (DetectCam)
-usb_center_raw   = USBWebcamCamera(device_index=USB_DEVICE_INDEX, width=USB_CAPTURE_WIDTH, height=USB_CAPTURE_HEIGHT, fps=USB_CAPTURE_FPS)
+usb_center_raw    = USBWebcamCamera(device_index=USB_DEVICE_INDEX, width=USB_CAPTURE_WIDTH, height=USB_CAPTURE_HEIGHT, fps=USB_CAPTURE_FPS)
 usb_center_detect = DetectCamera(
     base_cam=usb_center_raw,
     engine_path=YOLO_ENGINE_CENTER,
@@ -518,11 +517,12 @@ usb_center_detect = DetectCamera(
 
 # 4) Starte alle Threads
 oak_left_raw.start()
-oak_left_seg.start()       # OAK Left segmentiert
+oak_left_seg.start()        # OAK Left segmentiert
 oak_right_raw.start()
-oak_right_seg.start()      # OAK Right segmentiert
+oak_right_seg.start()       # OAK Right segmentiert
 usb_center_raw.start()
-usb_center_detect.start()  # USB-Webcam detektiert
+usb_center_detect.start()   # USB-Webcam detektiert
+
 
 # ============================================
 # MJPEG-Stream-Generator
@@ -589,7 +589,6 @@ def video_right() -> StreamingResponse:
 
 @app.on_event("shutdown")
 def cleanup_cameras() -> None:
-    # USB & OAK stoppen
     usb_center_detect.stop()  # stoppt implizit usb_center_raw
     oak_left_seg.stop()       # stoppt implizit oak_left_raw
     oak_right_seg.stop()      # stoppt implizit oak_right_raw
