@@ -1,0 +1,4 @@
+models/custom.pt filter=lfs diff=lfs merge=lfs -text
+models/NubsUpDown.pt filter=lfs diff=lfs merge=lfs -text
+models/synthetic.pt filter=lfs diff=lfs merge=lfs -text
+*.pt filter=lfs diff=lfs merge=lfs -text
