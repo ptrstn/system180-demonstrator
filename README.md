@@ -2,6 +2,11 @@
 
 ## Schneller Einstieg:
 
+### Git lfs installieren
+Unter [git-lfs](https://docs.github.com/de/repositories/working-with-files/managing-large-files/installing-git-large-file-storage) die Schritte folgen.  
+! Note: (`ARM64` Version herunterladen.)
+
+### Programm ausführen
 ```bash
 git clone https://github.com/ptrstn/system180-demonstrator
 cd system180-demonstrator
