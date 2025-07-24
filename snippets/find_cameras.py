@@ -29,10 +29,15 @@ def find_oak_cameras():
     
     for i, device in enumerate(devices):
         serial = device.getMxId()
-        name = device.getDeviceName()
+        # DeviceInfo hat kein getDeviceName(), verwende getDeviceInfo() oder default
+        try:
+            name = getattr(device, 'name', 'OAK Device')
+        except:
+            name = 'OAK Device'
+        
         print(f"  Kamera {i+1}:")
         print(f"    Serial: {serial}")
-        print(f"    Name: {name}")
+        print(f"    Type: {name}")
         print()
     
     return [device.getMxId() for device in devices]
