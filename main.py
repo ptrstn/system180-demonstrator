@@ -433,9 +433,16 @@ class DetectCamera(FrameGrabber):
                 # Reale Maße falls Ratio bekannt
                 if self.last_known_ratio is not None:
                     w_mm, h_mm = calculate_dimensions([x1, y1, x2, y2], self.last_known_ratio)
-                    label = f"{class_name} {conf:.2f}: {w_mm:.1f}mm×{h_mm:.1f}mm"
+                    # Verwende ASCII 'x' statt Unicode '×' um Encoding-Probleme zu vermeiden
+                    # Zeige größere Dimension als "Länge" für bessere Verständlichkeit
+                    if w_mm is not None and h_mm is not None:
+                        max_dim = max(w_mm, h_mm)
+                        min_dim = min(w_mm, h_mm)
+                        label = f"{class_name} {conf:.2f}: {max_dim:.1f}mm lang, {min_dim:.1f}mm breit"
+                    else:
+                        label = f"{class_name} {conf:.2f}: Messung fehlgeschlagen"
                 else:
-                    label = f"{class_name} {conf:.2f}"
+                    label = f"{class_name} {conf:.2f}: Kein ArUco-Marker"
 
                 cv2.rectangle(annotated_320, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
