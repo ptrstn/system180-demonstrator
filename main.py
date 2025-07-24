@@ -703,13 +703,20 @@ usb_center_detect.start()
 # ============================================
 # MJPEG-Stream-Generator
 # ============================================
-def mjpeg_stream_generator(camera: FrameGrabber) -> Generator[bytes, None, None]:
+def mjpeg_stream_generator(camera: FrameGrabber, rotation: str = "none") -> Generator[bytes, None, None]:
     boundary = MJPEG_BOUNDARY
     while True:
         frame = camera.get_latest_frame()
         if frame is None:
             time.sleep(0.01)
             continue
+
+        # Kamera-Rotation anwenden
+        if rotation == "left_90":  # Linke Kamera: 90° gegen Uhrzeigersinn
+            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        elif rotation == "right_90":  # Rechte Kamera: 90° im Uhrzeigersinn
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+
         success, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         if not success:
             time.sleep(0.01)
@@ -737,9 +744,9 @@ def index(request: Request) -> Response:
 
 @app.get("/video_left")
 def video_left() -> StreamingResponse:
-    # Linke OAK: Segment (Masken-Overlay + FPS)
+    # Linke OAK: Segment (Masken-Overlay + FPS) - 90° gegen Uhrzeigersinn gedreht
     return StreamingResponse(
-        mjpeg_stream_generator(oak_left_seg),
+        mjpeg_stream_generator(oak_left_seg, rotation="left_90"),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
     )
 
@@ -755,9 +762,9 @@ def video_center() -> StreamingResponse:
 
 @app.get("/video_right")
 def video_right() -> StreamingResponse:
-    # Rechte OAK: Segment (Masken-Overlay + FPS)
+    # Rechte OAK: Segment (Masken-Overlay + FPS) - 90° im Uhrzeigersinn gedreht
     return StreamingResponse(
-        mjpeg_stream_generator(oak_right_seg),
+        mjpeg_stream_generator(oak_right_seg, rotation="right_90"),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
     )
 
