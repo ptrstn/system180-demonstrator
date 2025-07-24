@@ -16,6 +16,8 @@ SCRIPTS=(
     "run.sh"
     "jetson_info.sh"
     "make_executable.sh"
+    "install_desktop_icon.sh"
+    "requirements.sh"
     "swap_cameras.py"
     "snippets/find_cameras.py"
     "snippets/jetson_info.py"
@@ -63,7 +65,7 @@ echo ""
 echo "🔍 Finale Überprüfung:"
 echo "========================================"
 
-MAIN_SCRIPTS=("setup.sh" "convert_models_to_engine.sh" "run.sh" "snippets/find_cameras.py" "jetson_info.sh")
+MAIN_SCRIPTS=("setup.sh" "convert_models_to_engine.sh" "run.sh" "snippets/find_cameras.py" "jetson_info.sh" "install_desktop_icon.sh")
 
 for script in "${MAIN_SCRIPTS[@]}"; do
     if [ -f "$script" ] && [ -x "$script" ]; then
@@ -82,6 +84,7 @@ echo "   bash setup.sh"
 echo "   bash convert_models_to_engine.sh"
 echo "   bash run.sh"
 echo "   bash jetson_info.sh"
+echo "   bash install_desktop_icon.sh"
 echo "   python3 snippets/find_cameras.py"
 echo "   python3 swap_cameras.py"
 echo "   python3 snippets/jetson_info.py"
