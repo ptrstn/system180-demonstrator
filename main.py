@@ -314,7 +314,8 @@ class DetectCamera(FrameGrabber):
         self._is_running = False
         self._frame_counter = 0
         self.last_known_ratio: Optional[float] = None  # Pixel→mm-Ratio
-        self._last_time = time.time()                 # für FPS-Berechnung
+        self._fps_start_time = time.time()            # Startzeit für FPS-Berechnung
+        self._fps_frame_count = 0                     # Frame-Zähler für FPS
         self._fps: float = 0.0                        # zuletzt berechnete FPS
 
     def start(self) -> None:
@@ -337,12 +338,17 @@ class DetectCamera(FrameGrabber):
                 time.sleep(0.001)
                 continue
 
-            # FPS berechnen
+            # FPS berechnen (über mehrere Frames hinweg)
+            self._fps_frame_count += 1
             current_time = time.time()
-            dt = current_time - self._last_time
-            if dt > 0:
-                self._fps = 1.0 / dt
-            self._last_time = current_time
+            elapsed_time = current_time - self._fps_start_time
+            
+            # FPS alle 30 Frames oder alle 2 Sekunden neu berechnen
+            if self._fps_frame_count >= 30 or elapsed_time >= 2.0:
+                if elapsed_time > 0:
+                    self._fps = self._fps_frame_count / elapsed_time
+                self._fps_start_time = current_time
+                self._fps_frame_count = 0
 
             self._frame_counter += 1
 
@@ -526,7 +532,8 @@ class SegmentCamera(FrameGrabber):
         self._latest_annotated_320: Optional[np.ndarray] = None
         self._is_running = False
         self._frame_counter = 0
-        self._last_time = time.time()
+        self._fps_start_time = time.time()
+        self._fps_frame_count = 0
         self._fps: float = 0.0
 
     def start(self) -> None:
@@ -549,11 +556,17 @@ class SegmentCamera(FrameGrabber):
                 time.sleep(0.001)
                 continue
 
+            # FPS berechnen (über mehrere Frames hinweg)
+            self._fps_frame_count += 1
             current_time = time.time()
-            dt = current_time - self._last_time
-            if dt > 0:
-                self._fps = 1.0 / dt
-            self._last_time = current_time
+            elapsed_time = current_time - self._fps_start_time
+            
+            # FPS alle 30 Frames oder alle 2 Sekunden neu berechnen
+            if self._fps_frame_count >= 30 or elapsed_time >= 2.0:
+                if elapsed_time > 0:
+                    self._fps = self._fps_frame_count / elapsed_time
+                self._fps_start_time = current_time
+                self._fps_frame_count = 0
 
             self._frame_counter += 1
             if (self._frame_counter % self.skip_frames) != 0:
