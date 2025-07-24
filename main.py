@@ -510,6 +510,7 @@ class SegmentCamera(FrameGrabber):
         device: str = YOLO_DEVICE,
         skip_frames: int = SKIP_FRAMES,
         batch_size: int = BATCH_SIZE,
+        rotation: str = "none",  # Neu: Rotation Parameter
     ) -> None:
         super().__init__()
         self.base_cam = base_cam
@@ -520,6 +521,7 @@ class SegmentCamera(FrameGrabber):
         self.device = device
         self.skip_frames = skip_frames
         self.batch_size = batch_size
+        self.rotation = rotation  # Speichere Rotation
 
         # YOLO-Segment-Engine (TensorRT FP16)
         self.model = YOLO(engine_path, task="segment")
@@ -597,12 +599,18 @@ class SegmentCamera(FrameGrabber):
             seg_overlay_rgb = results[0].plot()
             annotated_320 = cv2.cvtColor(seg_overlay_rgb, cv2.COLOR_RGB2BGR)
 
-            # FPS-Anzeige
+            # Rotation ZUERST anwenden (vor FPS-Overlay)
+            if self.rotation == "left_90":  # Linke Kamera: 90° im Uhrzeigersinn
+                annotated_320 = cv2.rotate(annotated_320, cv2.ROTATE_90_CLOCKWISE)
+            elif self.rotation == "right_90":  # Rechte Kamera: 90° gegen Uhrzeigersinn
+                annotated_320 = cv2.rotate(annotated_320, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+            # NACH der Rotation: FPS-Anzeige
             fps_text = f"FPS: {self._fps:.1f}"
             cv2.putText(
                 annotated_320,
                 fps_text,
-                (5, self.model_input_size - 5),
+                (5, annotated_320.shape[0] - 5),  # Dynamische Position basierend auf aktueller Höhe
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 (255, 255, 0),
@@ -663,6 +671,7 @@ oak_left_seg   = SegmentCamera(
     device=YOLO_DEVICE,
     skip_frames=SKIP_FRAMES,
     batch_size=BATCH_SIZE,
+    rotation="left_90",  # Linke Kamera: 90° im Uhrzeigersinn
 )
 
 oak_right_raw  = OAK1MaxCamera(device_id=right_oak_serial, width=OAK_FRAME_WIDTH, height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
@@ -676,6 +685,7 @@ oak_right_seg  = SegmentCamera(
     device=YOLO_DEVICE,
     skip_frames=SKIP_FRAMES,
     batch_size=BATCH_SIZE,
+    rotation="right_90",  # Rechte Kamera: 90° gegen Uhrzeigersinn
 )
 
 usb_center_raw    = USBWebcamCamera(device_index=USB_DEVICE_INDEX, width=USB_CAPTURE_WIDTH, height=USB_CAPTURE_HEIGHT, fps=USB_CAPTURE_FPS)
@@ -703,19 +713,13 @@ usb_center_detect.start()
 # ============================================
 # MJPEG-Stream-Generator
 # ============================================
-def mjpeg_stream_generator(camera: FrameGrabber, rotation: str = "none") -> Generator[bytes, None, None]:
+def mjpeg_stream_generator(camera: FrameGrabber) -> Generator[bytes, None, None]:
     boundary = MJPEG_BOUNDARY
     while True:
         frame = camera.get_latest_frame()
         if frame is None:
             time.sleep(0.01)
             continue
-
-        # Kamera-Rotation anwenden
-        if rotation == "left_90":  # Linke Kamera: 90° gegen Uhrzeigersinn
-            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        elif rotation == "right_90":  # Rechte Kamera: 90° im Uhrzeigersinn
-            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
 
         success, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         if not success:
@@ -744,9 +748,9 @@ def index(request: Request) -> Response:
 
 @app.get("/video_left")
 def video_left() -> StreamingResponse:
-    # Linke OAK: Segment (Masken-Overlay + FPS) - 90° gegen Uhrzeigersinn gedreht
+    # Linke OAK: Segment (Masken-Overlay + FPS) - Rotation in Kamera-Klasse
     return StreamingResponse(
-        mjpeg_stream_generator(oak_left_seg, rotation="left_90"),
+        mjpeg_stream_generator(oak_left_seg),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
     )
 
@@ -762,9 +766,9 @@ def video_center() -> StreamingResponse:
 
 @app.get("/video_right")
 def video_right() -> StreamingResponse:
-    # Rechte OAK: Segment (Masken-Overlay + FPS) - 90° im Uhrzeigersinn gedreht
+    # Rechte OAK: Segment (Masken-Overlay + FPS) - Rotation in Kamera-Klasse
     return StreamingResponse(
-        mjpeg_stream_generator(oak_right_seg, rotation="right_90"),
+        mjpeg_stream_generator(oak_right_seg),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
     )
 
