@@ -59,7 +59,7 @@ Type=Application
 Name=System180 Demonstrator
 Comment=Startet den System180 Demonstrator mit 3-Kamera Setup
 Exec=gnome-terminal --working-directory="$PROJECT_DIR" --title="System180 Demonstrator" -- bash -c './run.sh; echo ""; echo "Drücke Enter zum Schließen..."; read'
-Icon=applications-utilities
+Icon=camera-video
 Terminal=false
 StartupNotify=true
 Categories=Development;Utility;
