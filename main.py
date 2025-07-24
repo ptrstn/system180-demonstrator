@@ -314,7 +314,8 @@ class DetectCamera(FrameGrabber):
         self._is_running = False
         self._frame_counter = 0
         self.last_known_ratio: Optional[float] = None  # Pixel→mm-Ratio
-        self._last_time = time.time()                 # für FPS-Berechnung
+        self._fps_start_time = time.time()            # Startzeit für FPS-Berechnung
+        self._fps_frame_count = 0                     # Frame-Zähler für FPS
         self._fps: float = 0.0                        # zuletzt berechnete FPS
 
     def start(self) -> None:
@@ -337,12 +338,17 @@ class DetectCamera(FrameGrabber):
                 time.sleep(0.001)
                 continue
 
-            # FPS berechnen
+            # FPS berechnen (über mehrere Frames hinweg)
+            self._fps_frame_count += 1
             current_time = time.time()
-            dt = current_time - self._last_time
-            if dt > 0:
-                self._fps = 1.0 / dt
-            self._last_time = current_time
+            elapsed_time = current_time - self._fps_start_time
+            
+            # FPS alle 30 Frames oder alle 2 Sekunden neu berechnen
+            if self._fps_frame_count >= 30 or elapsed_time >= 2.0:
+                if elapsed_time > 0:
+                    self._fps = self._fps_frame_count / elapsed_time
+                self._fps_start_time = current_time
+                self._fps_frame_count = 0
 
             self._frame_counter += 1
 
@@ -427,7 +433,10 @@ class DetectCamera(FrameGrabber):
                 # Reale Maße falls Ratio bekannt
                 if self.last_known_ratio is not None:
                     w_mm, h_mm = calculate_dimensions([x1, y1, x2, y2], self.last_known_ratio)
-                    label = f"{class_name} {conf:.2f}: {w_mm:.1f}mm×{h_mm:.1f}mm"
+                    if w_mm is not None and h_mm is not None:
+                        label = f"{class_name} {conf:.2f}: {w_mm:.1f}x{h_mm:.1f}mm"
+                    else:
+                        label = f"{class_name} {conf:.2f}"
                 else:
                     label = f"{class_name} {conf:.2f}"
 
@@ -504,6 +513,7 @@ class SegmentCamera(FrameGrabber):
         device: str = YOLO_DEVICE,
         skip_frames: int = SKIP_FRAMES,
         batch_size: int = BATCH_SIZE,
+        rotation: str = "none",  # Neu: Rotation Parameter
     ) -> None:
         super().__init__()
         self.base_cam = base_cam
@@ -514,6 +524,7 @@ class SegmentCamera(FrameGrabber):
         self.device = device
         self.skip_frames = skip_frames
         self.batch_size = batch_size
+        self.rotation = rotation  # Speichere Rotation
 
         # YOLO-Segment-Engine (TensorRT FP16)
         self.model = YOLO(engine_path, task="segment")
@@ -526,7 +537,8 @@ class SegmentCamera(FrameGrabber):
         self._latest_annotated_320: Optional[np.ndarray] = None
         self._is_running = False
         self._frame_counter = 0
-        self._last_time = time.time()
+        self._fps_start_time = time.time()
+        self._fps_frame_count = 0
         self._fps: float = 0.0
 
     def start(self) -> None:
@@ -549,11 +561,17 @@ class SegmentCamera(FrameGrabber):
                 time.sleep(0.001)
                 continue
 
+            # FPS berechnen (über mehrere Frames hinweg)
+            self._fps_frame_count += 1
             current_time = time.time()
-            dt = current_time - self._last_time
-            if dt > 0:
-                self._fps = 1.0 / dt
-            self._last_time = current_time
+            elapsed_time = current_time - self._fps_start_time
+            
+            # FPS alle 30 Frames oder alle 2 Sekunden neu berechnen
+            if self._fps_frame_count >= 30 or elapsed_time >= 2.0:
+                if elapsed_time > 0:
+                    self._fps = self._fps_frame_count / elapsed_time
+                self._fps_start_time = current_time
+                self._fps_frame_count = 0
 
             self._frame_counter += 1
             if (self._frame_counter % self.skip_frames) != 0:
@@ -584,12 +602,18 @@ class SegmentCamera(FrameGrabber):
             seg_overlay_rgb = results[0].plot()
             annotated_320 = cv2.cvtColor(seg_overlay_rgb, cv2.COLOR_RGB2BGR)
 
-            # FPS-Anzeige
+            # Rotation ZUERST anwenden (vor FPS-Overlay)
+            if self.rotation == "left_90":  # Linke Kamera: 90° im Uhrzeigersinn
+                annotated_320 = cv2.rotate(annotated_320, cv2.ROTATE_90_CLOCKWISE)
+            elif self.rotation == "right_90":  # Rechte Kamera: 90° gegen Uhrzeigersinn
+                annotated_320 = cv2.rotate(annotated_320, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+            # NACH der Rotation: FPS-Anzeige
             fps_text = f"FPS: {self._fps:.1f}"
             cv2.putText(
                 annotated_320,
                 fps_text,
-                (5, self.model_input_size - 5),
+                (5, annotated_320.shape[0] - 5),  # Dynamische Position basierend auf aktueller Höhe
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 (255, 255, 0),
@@ -650,6 +674,7 @@ oak_left_seg   = SegmentCamera(
     device=YOLO_DEVICE,
     skip_frames=SKIP_FRAMES,
     batch_size=BATCH_SIZE,
+    rotation="left_90",  # Linke Kamera: 90° im Uhrzeigersinn
 )
 
 oak_right_raw  = OAK1MaxCamera(device_id=right_oak_serial, width=OAK_FRAME_WIDTH, height=OAK_FRAME_HEIGHT, fps=OAK_FPS)
@@ -663,6 +688,7 @@ oak_right_seg  = SegmentCamera(
     device=YOLO_DEVICE,
     skip_frames=SKIP_FRAMES,
     batch_size=BATCH_SIZE,
+    rotation="right_90",  # Rechte Kamera: 90° gegen Uhrzeigersinn
 )
 
 usb_center_raw    = USBWebcamCamera(device_index=USB_DEVICE_INDEX, width=USB_CAPTURE_WIDTH, height=USB_CAPTURE_HEIGHT, fps=USB_CAPTURE_FPS)
@@ -697,6 +723,7 @@ def mjpeg_stream_generator(camera: FrameGrabber) -> Generator[bytes, None, None]
         if frame is None:
             time.sleep(0.01)
             continue
+
         success, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         if not success:
             time.sleep(0.01)
@@ -724,7 +751,7 @@ def index(request: Request) -> Response:
 
 @app.get("/video_left")
 def video_left() -> StreamingResponse:
-    # Linke OAK: Segment (Masken-Overlay + FPS)
+    # Linke OAK: Segment (Masken-Overlay + FPS) - Rotation in Kamera-Klasse
     return StreamingResponse(
         mjpeg_stream_generator(oak_left_seg),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
@@ -742,7 +769,7 @@ def video_center() -> StreamingResponse:
 
 @app.get("/video_right")
 def video_right() -> StreamingResponse:
-    # Rechte OAK: Segment (Masken-Overlay + FPS)
+    # Rechte OAK: Segment (Masken-Overlay + FPS) - Rotation in Kamera-Klasse
     return StreamingResponse(
         mjpeg_stream_generator(oak_right_seg),
         media_type="multipart/x-mixed-replace; boundary=frameboundary",
