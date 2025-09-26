@@ -66,126 +66,32 @@
             }
         }
 
-        /* --- Abschnitt "Fehlertypen" --- */
-        .features-section {
-            width: 100%;
-            background-color: #ffffff;
-            border-radius: 8px;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-            margin: 0 auto 30px auto;
+        /* --- Logo Header Styles --- */
+        .logo-header {
+            display: flex;
+            justify-content: center;
+            align-items: center;
             padding: 20px;
-            max-width: 1200px;
-        }
-        .features-section h3 {
-            text-align: center;
-            font-size: 1.5rem;
-            margin-bottom: 20px;
-            color: #333333;
-            border-bottom: 2px solid #ddd;
-            padding-bottom: 10px;
-        }
-        .features-grid {
-            display: flex;
-            justify-content: space-evenly;
-            flex-wrap: wrap;
-        }
-        .feature-btn {
             background-color: #ffffff;
-            border: none;
-            border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            width: 150px;
-            height: 150px;
-            margin: 10px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            transition: transform 0.1s ease-in-out;
-            cursor: pointer;
+            margin-bottom: 20px;
+            gap: 40px;
         }
-        .feature-btn:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-        }
-        .icon-circle {
-            background-color: #7FC97F;
-            width: 60px;
+        .logo-header img {
             height: 60px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-bottom: 10px;
-            font-size: 1.5rem;
-            color: #ffffff;
-        }
-        .feature-label {
-            text-align: center;
-            font-size: 0.95rem;
-            color: #333333;
-        }
-
-        /* --- Save-Button --- */
-        #save-btn {
-            background-color: #28a745;
-            color: #ffffff;
-            border: none;
-            border-radius: 5px;
-            padding: 12px 24px;
-            font-size: 1rem;
-            cursor: pointer;
-            margin: 20px auto;
-            display: block;
-            transition: background-color 0.2s ease-in-out;
-        }
-        #save-btn:hover {
-            background-color: #218838;
-        }
-
-        /* --- Status-Leiste --- */
-        #status-bar {
-            background-color: #ffffff;
-            border-left: 5px solid #28a745;
-            border-radius: 5px;
-            padding: 15px;
-            margin: 20px auto;
-            max-width: 800px;
-            display: flex;
-            align-items: center;
-            color: #333333;
-            font-size: 1rem;
-        }
-        #status-bar.connected::before {
-            content: "✔ ";
-            color: #28a745;
-            margin-right: 8px;
-        }
-        #status-bar.disconnected::before {
-            content: "✖ ";
-            color: #dc3545;
-            margin-right: 8px;
-        }
-
-        /* --- Restart-Button --- */
-        #restart-btn {
-            background-color: #fd7e14;
-            color: #ffffff;
-            border: none;
-            border-radius: 5px;
-            padding: 12px 24px;
-            font-size: 1rem;
-            cursor: pointer;
-            margin: 20px auto 40px auto;
-            display: block;
-            transition: background-color 0.2s ease-in-out;
-        }
-        #restart-btn:hover {
-            background-color: #e8590c;
+            max-width: 200px;
+            object-fit: contain;
         }
     </style>
 </head>
 <body>
+    <!-- Logo Header -->
+    <div class="logo-header">
+        <img src="/static/system-180-logo.jpg" alt="System 180 Logo">
+        <img src="/static/green-ai-hub-mittelstand.svg" alt="Green AI Hub Logo">
+        <img src="/static/dfki_Logo_vz-1024x292.png" alt="DFKI Logo">
+    </div>
+
     <!-- Three-Camera Panels -->
     <div class="container">
         <!-- Left OAK-1 Max -->
@@ -207,47 +113,5 @@
         </div>
     </div>
 
-    <!-- Features-Section -->
-    <div class="features-section">
-        <h3>Fehlertypen</h3>
-        <div class="features-grid">
-            <!-- KI-Zustandserkennung -->
-            <button class="feature-btn">
-                <div class="icon-circle">🤖</div>
-                <div class="feature-label">KI-<br>Zustandserkennung</div>
-            </button>
-            <!-- Verbogen -->
-            <button class="feature-btn">
-                <div class="icon-circle">↗️</div>
-                <div class="feature-label">Verbogen</div>
-            </button>
-            <!-- Delle -->
-            <button class="feature-btn">
-                <div class="icon-circle">⚙️</div>
-                <div class="feature-label">Delle</div>
-            </button>
-            <!-- Kratzer -->
-            <button class="feature-btn">
-                <div class="icon-circle">✂️</div>
-                <div class="feature-label">Kratzer</div>
-            </button>
-            <!-- Verschmutzt -->
-            <button class="feature-btn">
-                <div class="icon-circle">🧹</div>
-                <div class="feature-label">Verschmutzt</div>
-            </button>
-        </div>
-    </div>
-
-    <!-- Save-Detections Button -->
-    <button id="save-btn">Save Current Detections to DataFrame</button>
-
-    <!-- Status-Bar -->
-    <div id="status-bar" class="connected">
-        Verbunden. Bereit für Fehlererkennung.
-    </div>
-
-    <!-- Restart-Button -->
-    <button id="restart-btn">🔄 System neu starten</button>
 </body>
 </html>
