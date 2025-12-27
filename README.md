@@ -5,6 +5,7 @@ Schneller Einstieg:
 ```bash
 git clone https://github.com/ptrstn/system180-demonstrator
 cd system180-demonstrator
+./model-conversion.sh
 python main.py
 ```
 
